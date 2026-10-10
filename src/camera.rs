@@ -19,7 +19,15 @@ pub const CHAPTER_TWELVE_LOOKFROM: Vec3 = Vec3::new(-2.0, 2.0, 1.0);
 pub const CHAPTER_TWELVE_LOOKAT: Vec3 = Vec3::new(0.0, 0.0, -1.0);
 pub const CHAPTER_TWELVE_VUP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 
-/// A pinhole camera (Â§7), positioned and aimed from Â§12.
+/// §13 narrows the lens from 90 degrees to 20 and opens it to a 10-degree
+/// aperture focused at 3.4. The eye and the target are unchanged from §12 --
+/// only the framing and the aperture move, so they keep the §12 constants.
+pub const CHAPTER_THIRTEEN_VFOV: f64 = 20.0;
+pub const CHAPTER_THIRTEEN_DEFOCUS_ANGLE: f64 = 10.0;
+pub const CHAPTER_THIRTEEN_FOCUS_DIST: f64 = 3.4;
+
+/// A camera: a pinhole from Â§7, positioned and aimed from Â§12, given a
+/// lens aperture in Â§13.
 ///
 /// Â§12 is where the image stops being a fixed viewport seen from the origin.
 /// The eye moves to `lookfrom`, the frame is built out of `lookat` and `vup`
@@ -33,6 +41,13 @@ pub const CHAPTER_TWELVE_VUP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 /// down, because `viewport_v = viewport_height * -v` flips the camera's own up
 /// vector. So `j = 0` is the top row and no mirror is needed. `render` writes
 /// `(i, j)` straight through; see `render`.
+///
+/// §13 gives the camera a lens instead of a pinhole. Ray origins stop being
+/// `lookfrom` and become a uniform point on a defocus disk centred there, sized
+/// by `focus_dist` and `defocus_angle`. The orientation above is untouched:
+/// the disk is spanned by the same `u` and `v`, and the picture still reads
+/// row `j` as row `j`. At `defocus_angle = 0` the disk has zero radius and the
+/// camera is exactly the §7 pinhole again.
 pub struct Camera {
     pub image_width: usize,
     pub samples_per_pixel: usize,
@@ -43,10 +58,24 @@ pub struct Camera {
     pub lookat: Vec3,
     pub vup: Vec3,
 
+    /// The aperture (§13), kept public so a caller can tell a pinhole from a
+    /// thin lens without re-deriving it. `defocus_angle` is the full opening
+    /// angle of the lens in degrees; `focus_dist` is how far in front of the
+    /// eye the plane of focus sits.
+    pub defocus_angle: f64,
+    pub focus_dist: f64,
+
     pub image_height: usize,
     pixel00_loc: Vec3,
     pixel_delta_u: Vec3,
     pixel_delta_v: Vec3,
+
+    /// The aperture's own basis vectors (§13): `defocus_disk_u = u * radius`
+    /// and `defocus_disk_v = v * radius`. Together they span the disk that ray
+    /// origins are scattered over. At `defocus_angle = 0` both are zero and the
+    /// disk collapses to `lookfrom`, which is the pinhole camera of §7-§12.
+    defocus_disk_u: Vec3,
+    defocus_disk_v: Vec3,
 
     /// The camera frame (Â§12). `w` points from `lookat` back to `lookfrom`, `u`
     /// runs right across the picture and `v` runs up it; all three are unit
@@ -80,6 +109,18 @@ impl Camera {
     /// `w` points back from the target toward the eye, `u` runs right and `v`
     /// runs up. The view's `viewport_v` is `viewport_height * -v`, so image
     /// rows increase downward.
+    ///
+    /// `defocus_angle` is the lens aperture in degrees and `focus_dist` is the
+    /// distance at which the lens is focused (§13). Both only affect where ray
+    /// *origins* land; the viewport above, and therefore every framing
+    /// property this camera has, is independent of them. A `defocus_angle` of
+    /// zero is a pinhole.
+    ///
+    /// Ten parameters trips clippy's `too_many_arguments`, which counts `self`
+    /// and defaults to a threshold of seven. The arguments are a closed
+    /// record of the book's camera settings rather than a bundle of behaviour,
+    /// so the attribute is the honest answer here.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         image_width: usize,
         samples_per_pixel: usize,
@@ -89,6 +130,8 @@ impl Camera {
         lookfrom: Vec3,
         lookat: Vec3,
         vup: Vec3,
+        defocus_angle: f64,
+        focus_dist: f64,
     ) -> Self {
         let image_height = Self::derived_height(image_width, aspect_ratio);
 
@@ -117,6 +160,19 @@ impl Camera {
         let viewport_upper_left = lookfrom - focal_length * w - viewport_u / 2.0 - viewport_v / 2.0;
         let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
+        // §13: the defocus disk is the lens aperture. Rays start anywhere on it
+        // rather than all at `lookfrom`, which spreads out-of-focus rays the way
+        // a real lens does. The half-angle, not the full angle, is what fixes
+        // the radius: the cone of rays the lens admits half-angles at
+        // `defocus_angle / 2`, and at `focus_dist` that cone is a disk of
+        // radius `focus_dist * tan(that half-angle)`.
+        //
+        // `defocus_angle = 0` gives a radius of exactly 0, so the disk is the
+        // point `lookfrom` and the camera is the §7 pinhole.
+        let defocus_radius = focus_dist * (crate::degrees_to_radians(defocus_angle / 2.0)).tan();
+        let defocus_disk_u = u * defocus_radius;
+        let defocus_disk_v = v * defocus_radius;
+
         Self {
             image_width,
             samples_per_pixel,
@@ -126,10 +182,14 @@ impl Camera {
             lookfrom,
             lookat,
             vup,
+            defocus_angle,
+            focus_dist,
             image_height,
             pixel00_loc,
             pixel_delta_u,
             pixel_delta_v,
+            defocus_disk_u,
+            defocus_disk_v,
             u,
             v,
             w,
@@ -137,7 +197,9 @@ impl Camera {
     }
 
     /// The Â§12 listing: 400px wide, 16:9, a 90-degree lens from (-2, 2, 1)
-    /// looking at the origin's -z end.
+    /// looking at the origin's -z end. §12 has no aperture, so the last two
+    /// arguments pin it shut: a zero `defocus_angle` collapses the defocus disk
+    /// to a point and every ray leaves from `lookfrom`.
     pub fn chapter_twelve() -> Self {
         Self::new(
             CHAPTER_TWELVE_WIDTH,
@@ -148,6 +210,34 @@ impl Camera {
             CHAPTER_TWELVE_LOOKFROM,
             CHAPTER_TWELVE_LOOKAT,
             CHAPTER_TWELVE_VUP,
+            0.0,
+            10.0,
+        )
+    }
+
+    /// The §13 listing: the same eye and target as §12, but a 20-degree lens
+    /// behind a 10-degree aperture focused at 3.4.
+    ///
+    /// `focus_dist = 3.4` is almost the `3.4641...` from the eye to the middle
+    /// ball, so the three spheres sit on the plane of focus and the ground
+    /// running away to the horizon -- infinitely far, in the limit -- does not.
+    /// That is the whole of the chapter's image: a wide lens close to the
+    /// subject blurs everything behind it.
+    ///
+    /// The frame size and the aspect ratio are read off the §12 constants
+    /// because §13 does not change either; only the lens and the aperture move.
+    pub fn chapter_thirteen() -> Self {
+        Self::new(
+            CHAPTER_TWELVE_WIDTH,
+            CHAPTER_TWELVE_SAMPLES,
+            CHAPTER_TWELVE_DEPTH,
+            CHAPTER_TWELVE_ASPECT,
+            CHAPTER_THIRTEEN_VFOV,
+            CHAPTER_TWELVE_LOOKFROM,
+            CHAPTER_TWELVE_LOOKAT,
+            CHAPTER_TWELVE_VUP,
+            CHAPTER_THIRTEEN_DEFOCUS_ANGLE,
+            CHAPTER_THIRTEEN_FOCUS_DIST,
         )
     }
 
@@ -157,6 +247,12 @@ impl Camera {
     /// state replays the same image and the test suite can assert on exact
     /// pixel values. `renderer::render_scene` owns the dimension check;
     /// `new` returns `Self`, not a `Result`.
+    ///
+    /// §13 costs two more draws per sample, because a sample with an open
+    /// aperture also draws a point on the defocus disk. A pinned camera draws
+    /// none: `get_ray` short-circuits on `defocus_angle <= 0` before touching
+    /// `rng`. That is what keeps the exact-pixel tests below exact, since they
+    /// index the stream at two draws per sample.
     ///
     /// Row `j` is written to image row `j`, unmirrored. Â§12 anchored the
     /// viewport on `pixel00_loc`, the top-left, and gave the camera a downward
@@ -171,7 +267,7 @@ impl Camera {
                 for _ in 0..self.samples_per_pixel {
                     let du = rng.range(0.0, 1.0);
                     let dv = rng.range(0.0, 1.0);
-                    let ray = self.get_ray(i, j, du, dv);
+                    let ray = self.get_ray(i, j, du, dv, rng);
                     color += self.ray_color(&ray, self.max_depth, world, rng);
                 }
                 image.set(i, j, (color / self.samples_per_pixel as f64).to_rgb());
@@ -194,11 +290,38 @@ impl Camera {
     ///
     /// `j` counts *down*. That is the whole of Â§12's orientation change and it
     /// is why `render` no longer mirrors its write index.
-    pub fn get_ray(&self, i: usize, j: usize, du: f64, dv: f64) -> Ray {
+    ///
+    /// §13 splits the ray's two ends apart. `pixel_sample` -- the point on the
+    /// viewport -- is unchanged, so the framing is unchanged. The *origin* is a
+    /// point on the defocus disk instead of `lookfrom`, and the direction runs
+    /// from there to `pixel_sample`. Rays that hit the same point on the
+    /// viewport from different points on the lens are what make an
+    /// out-of-focus surface spread.
+    pub fn get_ray(&self, i: usize, j: usize, du: f64, dv: f64, rng: &mut Rng) -> Ray {
         let pixel_sample = self.pixel00_loc
             + self.pixel_delta_u * (i as f64 + du)
             + self.pixel_delta_v * (j as f64 + dv);
-        Ray::new(self.lookfrom, pixel_sample - self.lookfrom)
+
+        // A zero aperture is a pinhole: the disk has zero radius, so the sample
+        // would be `lookfrom` exactly, but taking the branch outright also keeps
+        // the generator untouched and this a two-draw sample.
+        let ray_origin = if self.defocus_angle <= 0.0 {
+            self.lookfrom
+        } else {
+            self.defocus_disk_sample(rng)
+        };
+
+        Ray::new(ray_origin, pixel_sample - ray_origin)
+    }
+
+    /// A random point on the defocus disk (§13).
+    ///
+    /// `Rng::in_unit_disk` rejects until it has a point strictly inside the
+    /// unit disk, so `|p| < 1` and the sample is at most `defocus_radius` from
+    /// `lookfrom` -- never more, and never on the rim in practice.
+    pub fn defocus_disk_sample(&self, rng: &mut Rng) -> Vec3 {
+        let p = rng.in_unit_disk();
+        self.lookfrom + self.defocus_disk_u * p.x + self.defocus_disk_v * p.y
     }
 
     /// Shade one ray: a hit bounces off its material, a miss is the sky (Â§9).
@@ -244,10 +367,15 @@ mod tests {
     /// a 90-degree lens.
     ///
     /// Every test that needs a closed form uses this one, because a frame
-    /// aligned with the world axes can be worked out on paper. Â§12's own
+    /// aligned with the world axes can be worked out on paper. §12's own
     /// framing is tested through `Camera::chapter_twelve`, where the frame is
     /// oblique and only its invariants -- orthonormality, ordering -- survive
     /// without a render.
+    ///
+    /// The aperture is pinned shut at 0.0, which §13 needs for two reasons: the
+    /// ray origin is then exactly `lookfrom`, so the directions below stay
+    /// closed-form, and `get_ray` draws nothing from `rng`, so a sample stays
+    /// worth two draws and `first_draw` still indexes the stream.
     fn axis_camera(image_width: usize, samples: usize, depth: usize, aspect: f64) -> Camera {
         Camera::new(
             image_width,
@@ -258,6 +386,8 @@ mod tests {
             Vec3::ZERO,
             Vec3::new(0.0, 0.0, -1.0),
             Vec3::new(0.0, 1.0, 0.0),
+            0.0,
+            10.0,
         )
     }
 
@@ -274,13 +404,17 @@ mod tests {
     /// A world with nothing in it, so every ray misses and every sample costs
     /// exactly the two draws `render` makes before `get_ray`.
     ///
-    /// This is what keeps the pixel-exact tests below exact. Â§9 gave the
+    /// This is what keeps the pixel-exact tests below exact. §9 gave the
     /// generator a second job: a scattered ray draws from the same `Rng` that
     /// places the samples, and how many draws that costs depends on the path
-    /// the ray takes. Against the Â§6 scene, pixel (i, j)'s `du` is no longer at
+    /// the ray takes. Against the §6 scene, pixel (i, j)'s `du` is no longer at
     /// a fixed offset into the stream, because every pixel ahead of it may have
     /// spent a different number of draws. Against an empty world the
     /// arithmetic in `draw` and `first_draw` holds exactly.
+    ///
+    /// §13 adds a third caller of the generator -- the defocus disk -- but only
+    /// for a camera with an open aperture, and `empty_world` is only ever
+    /// paired with `axis_camera`'s. So "two draws" survives §13 unchanged.
     fn empty_world() -> HittableList<'static> {
         HittableList::new()
     }
@@ -311,8 +445,9 @@ mod tests {
     /// column `i`, then sample, two draws per ray, `du` before `dv` -- so any
     /// one sample can be reproduced without rendering the whole image, as long
     /// as the world draws nothing of its own. Against `empty_world` that holds;
-    /// against the Â§6 scene it does not, because Â§9 spends extra draws per
-    /// scatter.
+    /// against the §6 scene it does not, because §9 spends extra draws per
+    /// scatter. It also only holds for a pinned camera: §13's disk draw would
+    /// make it four per ray.
     fn draw(seed: u64, n: usize) -> f64 {
         let mut rng = Rng::seed_from_u64(seed);
         for _ in 0..n {
@@ -324,7 +459,8 @@ mod tests {
     /// Where pixel (i, j)'s first draw begins in that stream.
     ///
     /// Exact only while nothing ahead of (i, j) consumes extra draws, so every
-    /// caller pairs this with `empty_world`.
+    /// caller pairs this with `empty_world` and with `axis_camera`'s shut
+    /// aperture.
     fn first_draw(camera: &Camera, i: usize, j: usize) -> usize {
         2 * ((j * camera.image_width + i) * camera.samples_per_pixel)
     }
@@ -332,6 +468,10 @@ mod tests {
     /// Sample `k` of pixel (i, j), from the generator state `render` had
     /// reached at that point. Only exact against `empty_world`, for the reason
     /// `first_draw` gives.
+    ///
+    /// The `rng` handed to `get_ray` is the one the replay has left. `axis_camera`
+    /// is pinned shut, so `get_ray` never reads from it -- but passing a live
+    /// generator keeps this honest if the aperture ever opens.
     fn sample_ray(camera: &Camera, seed: u64, i: usize, j: usize, k: usize) -> Ray {
         let mut rng = Rng::seed_from_u64(seed);
         for _ in 0..first_draw(camera, i, j) + 2 * k {
@@ -339,7 +479,7 @@ mod tests {
         }
         let du = rng.range(0.0, 1.0);
         let dv = rng.range(0.0, 1.0);
-        camera.get_ray(i, j, du, dv)
+        camera.get_ray(i, j, du, dv, &mut rng)
     }
 
     #[test]
@@ -424,8 +564,30 @@ mod tests {
         let lookfrom = Vec3::new(-2.0, 2.0, 1.0);
         let lookat = Vec3::new(0.0, 0.0, -1.0);
         let vup = Vec3::new(0.0, 1.0, 0.0);
-        let narrow = Camera::new(400, 1, 1, 16.0 / 9.0, 20.0, lookfrom, lookat, vup);
-        let wide = Camera::new(400, 1, 1, 16.0 / 9.0, 90.0, lookfrom, lookat, vup);
+        let narrow = Camera::new(
+            400,
+            1,
+            1,
+            16.0 / 9.0,
+            20.0,
+            lookfrom,
+            lookat,
+            vup,
+            0.0,
+            10.0,
+        );
+        let wide = Camera::new(
+            400,
+            1,
+            1,
+            16.0 / 9.0,
+            90.0,
+            lookfrom,
+            lookat,
+            vup,
+            0.0,
+            10.0,
+        );
 
         let expected = |vfov: f64| {
             2.0 * (crate::degrees_to_radians(vfov) / 2.0).tan() * 12.0_f64.sqrt() / 225.0
@@ -504,28 +666,31 @@ mod tests {
         );
         assert!(camera.pixel_delta_u.x > 0.0, "`u` still runs right");
 
+        // The aperture is shut, so `get_ray` never reads the generator and one
+        // throwaway per call is enough to hand it a live one.
+        let mut rng = Rng::seed_from_u64(SEED);
         for (i, j, du, dv) in [
             (3usize, 0usize, 0.25, 0.25),
             (3, 1, 0.25, 0.25),
             (3, 7, 0.25, 0.25),
         ] {
-            let dir = camera.get_ray(i, j, du, dv).direction;
+            let dir = camera.get_ray(i, j, du, dv, &mut rng).direction;
             close(dir.x, x(i, du));
             close(dir.y, y(j, dv));
         }
 
         // One row is exactly one pixel step down, and the whole image is
         // `image_height` of them.
-        let top = camera.get_ray(3, 0, 0.25, 0.25).direction;
-        let below = camera.get_ray(3, 1, 0.25, 0.25).direction;
-        let bottom = camera.get_ray(3, 7, 0.25, 0.25).direction;
+        let top = camera.get_ray(3, 0, 0.25, 0.25, &mut rng).direction;
+        let below = camera.get_ray(3, 1, 0.25, 0.25, &mut rng).direction;
+        let bottom = camera.get_ray(3, 7, 0.25, 0.25, &mut rng).direction;
         close(below.y - top.y, -t / 4.0);
         close(bottom.y - top.y, -7.0 * t / 4.0);
         assert!(top.y > below.y && below.y > bottom.y);
 
         // Right is still right: `pixel_delta_u` keeps the sign of `u`.
-        let left = camera.get_ray(0, 3, 0.5, 0.5).direction;
-        let right = camera.get_ray(7, 3, 0.5, 0.5).direction;
+        let left = camera.get_ray(0, 3, 0.5, 0.5, &mut rng).direction;
+        let right = camera.get_ray(7, 3, 0.5, 0.5, &mut rng).direction;
         close(left.x, x(0, 0.5));
         close(right.x, x(7, 0.5));
         close(right.x - left.x, 7.0 * t / 4.0);
@@ -556,8 +721,12 @@ mod tests {
         let du = draw(SEED, n);
         let dv = draw(SEED, n + 1);
 
+        // §13's aperture is shut on this camera, so the generator `get_ray`
+        // takes is never read and the ray is still the §7 pinhole ray.
+        let mut rng = Rng::seed_from_u64(SEED);
+
         let direction = Vec3::new(-19.0 / 12.0 + du / 6.0, 11.0 / 12.0 - dv / 6.0, -1.0);
-        assert_vec_close(camera.get_ray(0, 0, du, dv).direction, direction);
+        assert_vec_close(camera.get_ray(0, 0, du, dv, &mut rng).direction, direction);
 
         // a = 0.5 * (unit.y + 1): blue is (1 - a) + a = 1, red gives up 0.5a
         // and green 0.3a. Pixel (0, 0) is the viewport's top-left square, so
@@ -867,6 +1036,181 @@ mod tests {
             sky > earth,
             "sky should sit above ground, got {sky} and {earth}"
         );
+    }
+
+    #[test]
+    fn zero_aperture_collapses_the_disk_to_a_point() {
+        // `defocus_angle = 0` gives `defocus_radius = 10 * tan(0) = 0`, so both
+        // disk axes are the zero vector and every sample is `lookfrom`. The sum
+        // is exact rather than merely close: `a + (+/-0.0) == a` for every
+        // non-zero `a`, and `lookfrom` has no zero components.
+        let camera = Camera::chapter_twelve();
+        assert_eq!(camera.defocus_angle, 0.0);
+        assert_eq!(camera.focus_dist, 10.0);
+
+        let mut rng = Rng::seed_from_u64(1);
+        for _ in 0..100 {
+            assert_eq!(camera.defocus_disk_sample(&mut rng), camera.lookfrom);
+        }
+    }
+
+    #[test]
+    fn the_defocus_disk_is_the_aperture_sized_by_the_half_angle() {
+        // `defocus_radius = focus_dist * tan(defocus_angle / 2)` is the radius at
+        // which the cone of admitted rays crosses the plane of focus. Two
+        // independent evaluations of it, so a stray `* PI / 180` or a missing
+        // halving cannot hide behind the test's own copy of the formula.
+        //
+        //   focus_dist = 10.0, defocus_angle = 0.6
+        //     half-angle = 0.3 deg = 0.3 * PI / 180 = 0.00523598775598299
+        //     tan of it                = 0.00523603560570013
+        //     radius = 10.0 * that     = 0.052360356057001275
+        let lookfrom = Vec3::new(-2.0, 2.0, 1.0);
+        let lookat = Vec3::new(0.0, 0.0, -1.0);
+        let vup = Vec3::new(0.0, 1.0, 0.0);
+        let camera = Camera::new(
+            400,
+            1,
+            1,
+            16.0 / 9.0,
+            20.0,
+            lookfrom,
+            lookat,
+            vup,
+            0.6,
+            10.0,
+        );
+
+        let expected = 10.0 * 0.3_f64.to_radians().tan();
+        close(camera.defocus_disk_u.length() / camera.u.length(), expected);
+        assert!(
+            (camera.defocus_disk_u.length() - 0.052360356057001275).abs() < 1e-15,
+            "defocus_radius was {}",
+            camera.defocus_disk_u.length()
+        );
+
+        // The §13 listing's own radius, on the other end of the scale:
+        //     3.4 * tan(5 deg) = 3.4 * 0.08748866352592401
+        //                       = 0.29746145598814161
+        let thirteen = Camera::chapter_thirteen();
+        assert!(
+            (thirteen.defocus_disk_u.length() - 0.29746145598814161).abs() < 1e-15,
+            "chapter_thirteen's radius was {}",
+            thirteen.defocus_disk_u.length()
+        );
+    }
+
+    #[test]
+    fn the_defocus_disk_spans_the_camera_axes() {
+        // `defocus_disk_u = u * radius` and `defocus_disk_v = v * radius`. The
+        // two are interchangeable in *length* -- |u| = |v| = 1 -- so any check
+        // that only compares magnitudes cannot tell them apart. Swapping them
+        // would rotate the lens's sampling pattern by a quarter turn and still
+        // pass every radius assertion in this file, so the orientation is
+        // pinned against the camera's own public frame instead.
+        let camera = Camera::chapter_thirteen();
+        let radius = 0.29746145598814161;
+
+        assert_vec_close(camera.defocus_disk_u, camera.u * radius);
+        assert_vec_close(camera.defocus_disk_v, camera.v * radius);
+        // And the signs: `u` runs right and `v` runs up, so the offsets the
+        // disk sample adds are along those and not against them.
+        assert!(camera.defocus_disk_u.dot(camera.u) > 0.0);
+        assert!(camera.defocus_disk_v.dot(camera.v) > 0.0);
+    }
+
+    #[test]
+    fn a_pinned_camera_leaves_the_generator_untouched() {
+        // The zero-aperture branch in `get_ray` is not cosmetic. With the
+        // branch, a sample on a pinhole camera costs exactly the two draws
+        // `render` makes for `du` and `dv`, which is what lets `first_draw`
+        // index the stream at `2 * samples`. Take the branch out and the disk
+        // draw shifts every sample after the first, and the pixel-exact tests
+        // above fail on their arithmetic rather than on a value.
+        let camera = axis_camera(4, 1, 1, 1.0);
+        let mut before = Rng::seed_from_u64(SEED);
+        let mut after = Rng::seed_from_u64(SEED);
+        before.f64();
+        after.f64();
+        let _ = camera.get_ray(1, 1, 0.5, 0.5, &mut after);
+        assert_eq!(
+            before.f64(),
+            after.f64(),
+            "a pinned camera must not spend a draw on the defocus disk"
+        );
+    }
+
+    #[test]
+    fn an_open_aperture_spends_a_draw_on_the_disk() {
+        // The mirror of the test above, and the reason the branch is worth
+        // having at all: with an aperture open, two samples through the same
+        // pixel leave from different points, so the pixel is an average over a
+        // cone rather than a single ray. Reject `get_ray`'s return and compare
+        // the origins directly.
+        let camera = Camera::chapter_thirteen();
+        let mut rng = Rng::seed_from_u64(SEED);
+        let first = camera.get_ray(3, 3, 0.5, 0.5, &mut rng);
+        let second = camera.get_ray(3, 3, 0.5, 0.5, &mut rng);
+        assert_ne!(
+            first.origin, second.origin,
+            "an open aperture should move the ray origin across the disk"
+        );
+        // Same pixel, same sample offset, so both rays run to the same point of
+        // the viewport -- `Ray::new` leaves the direction unnormalised, so
+        // `at(1.0)` is exactly that shared endpoint. Only the lens end moved.
+        assert_eq!(first.at(1.0), second.at(1.0));
+        // And each origin is within a defocus radius of the eye.
+        let radius = camera.defocus_disk_u.length();
+        assert!((first.origin - camera.lookfrom).length() <= radius + 1e-9);
+    }
+
+    #[test]
+    fn a_wide_aperture_spreads_ray_origins_over_the_disk() {
+        // The sample is `lookfrom + disk_u * p.x + disk_v * p.y` with `p` drawn
+        // from the unit disk, and `u` and `v` are orthonormal, so
+        //     |sample - lookfrom| = radius * |p| < radius
+        // strictly. `Rng::in_unit_disk` rejects while `p.length_squared() >= 1`,
+        // which is what makes the inequality strict; a sampler that allowed the
+        // rim would still satisfy the non-strict bound asserted here.
+        let camera = Camera::chapter_thirteen();
+        let mut rng = Rng::seed_from_u64(1);
+        let center = camera.lookfrom;
+        let mut max_distance = 0.0f64;
+        for _ in 0..1_000 {
+            let d = (camera.defocus_disk_sample(&mut rng) - center).length();
+            max_distance = max_distance.max(d);
+        }
+        let radius = (camera.defocus_disk_u.length() + camera.defocus_disk_v.length()) / 2.0;
+        assert!(max_distance > 0.0 && max_distance <= radius + 1e-9);
+    }
+
+    #[test]
+    fn defocus_radius_follows_the_aperture_angle() {
+        // Same eye, same target, same 20-degree lens, same focus distance of
+        // 3.4; only the opening changes. `radius = 3.4 tan(angle / 2)`:
+        //
+        //   2 degrees  -> 3.4 tan(1 deg) = 3.4 * 0.01745506493 = 0.05934722
+        //  20 degrees  -> 3.4 tan(10 deg) = 3.4 * 0.1763269807 = 0.59951173
+        //
+        // and `u` is the same unit vector in both, so the comparison on the last
+        // line is a comparison of radii.
+        let lookfrom = Vec3::new(-2.0, 2.0, 1.0);
+        let lookat = Vec3::new(0.0, 0.0, -1.0);
+        let vup = Vec3::new(0.0, 1.0, 0.0);
+        let small = Camera::new(400, 1, 1, 16.0 / 9.0, 20.0, lookfrom, lookat, vup, 2.0, 3.4);
+        let large = Camera::new(
+            400,
+            1,
+            1,
+            16.0 / 9.0,
+            20.0,
+            lookfrom,
+            lookat,
+            vup,
+            20.0,
+            3.4,
+        );
+        assert!(large.defocus_disk_u.length() > small.defocus_disk_u.length());
     }
 
     #[test]
