@@ -6,9 +6,12 @@
 
 pub mod cli;
 pub mod error;
+pub mod hittable;
 pub mod image;
+pub mod interval;
 pub mod ray;
 pub mod renderer;
+pub mod scene;
 pub mod sphere;
 pub mod vec3;
 
