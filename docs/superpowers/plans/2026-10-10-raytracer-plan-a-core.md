@@ -1526,8 +1526,8 @@ pub enum Scene {
 pub fn build(scene: Scene) -> Vec<Box<dyn Hittable>> {
     match scene {
         Scene::Spheres => {
-            let ground = Sphere::new(Vec3::new(0.0, -1000.0, 0.0), 1000.0);
-            let ball = Sphere::new(Vec3::new(0.0, 0.5, 0.0), 0.5);
+            let ground = Sphere::new(Vec3::new(0.0, -100.5, -1.0), 100.0);
+            let ball = Sphere::new(Vec3::new(0.0, 0.0, -1.0), 0.5);
             vec![Box::new(ground), Box::new(ball)]
         }
     }

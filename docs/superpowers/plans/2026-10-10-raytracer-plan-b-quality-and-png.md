@@ -547,12 +547,12 @@ pub fn build(scene: Scene) -> Vec<Box<dyn Hittable>> {
     match scene {
         Scene::Spheres => {
             let ground = Sphere::new(
-                Vec3::new(0.0, -1000.0, 0.0),
-                1000.0,
+                Vec3::new(0.0, -100.5, -1.0),
+                100.0,
                 Material::lambertian(Vec3::new(0.5, 0.5, 0.5)),
             );
             let ball = Sphere::new(
-                Vec3::new(0.0, 0.5, 0.0),
+                Vec3::new(0.0, 0.0, -1.0),
                 0.5,
                 Material::lambertian(Vec3::new(0.7, 0.3, 0.3)),
             );
@@ -780,12 +780,12 @@ pub fn build(scene: Scene) -> Vec<Box<dyn Hittable>> {
     match scene {
         Scene::Spheres => {
             let ground = Sphere::new(
-                Vec3::new(0.0, -1000.0, 0.0),
-                1000.0,
+                Vec3::new(0.0, -100.5, -1.0),
+                100.0,
                 Material::lambertian(Vec3::new(0.5, 0.5, 0.5)),
             );
             let ball = Sphere::new(
-                Vec3::new(0.0, 0.5, 0.0),
+                Vec3::new(0.0, 0.0, -1.0),
                 0.5,
                 Material::metal(Vec3::new(0.9, 0.4, 0.1), 0.0),
             );
@@ -983,8 +983,8 @@ pub fn build(scene: Scene) -> Vec<Box<dyn Hittable>> {
     match scene {
         Scene::Spheres => {
             let ground = Sphere::new(
-                Vec3::new(0.0, -1000.0, 0.0),
-                1000.0,
+                Vec3::new(0.0, -100.5, -1.0),
+                100.0,
                 Material::lambertian(Vec3::new(0.8, 0.8, 0.0)),
             );
             let left = Sphere::new(
@@ -2490,8 +2490,8 @@ pub fn build(scene: Scene, rng: &mut Rng) -> Vec<Box<dyn Hittable>> {
 
 fn build_spheres() -> Vec<Box<dyn Hittable>> {
     let ground = Sphere::new(
-        Vec3::new(0.0, -1000.0, 0.0),
-        1000.0,
+        Vec3::new(0.0, -100.5, -1.0),
+        100.0,
         Material::lambertian(Vec3::new(0.8, 0.8, 0.0)),
     );
     let left = Sphere::new(
@@ -2523,8 +2523,8 @@ fn build_cover(rng: &mut Rng) -> Vec<Box<dyn Hittable>> {
     let mut objects: Vec<Box<dyn Hittable>> = Vec::new();
 
     let ground = Sphere::new(
-        Vec3::new(0.0, -1000.0, 0.0),
-        1000.0,
+        Vec3::new(0.0, -100.5, -1.0),
+        100.0,
         Material::lambertian(Vec3::new(0.5, 0.5, 0.5)),
     );
     objects.push(Box::new(ground));
