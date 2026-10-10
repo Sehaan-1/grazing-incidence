@@ -174,8 +174,8 @@ prose. That leaves 12 code chapters, plus one of ours.
 | 2 | §3 The vec3 Class | `vec3` | unchanged image |
 | 3 | §4 Rays, Camera, Background | `ray` | sky gradient |
 | 4 | §5 Adding a Sphere | `sphere` | one sphere on sky |
-| 5 | §6 Normals & Multiple Objects | `hittable`, `interval` | two ground spheres + ball |
-| 6 | §7 Camera Into Its Own Class | `camera`, `HitRecord` | same scene, reframed |
+| 5 | §6 Normals & Multiple Objects | `hittable`, `interval`, `HitRecord` | two ground spheres + ball |
+| 6 | §7 Camera Into Its Own Class | `camera` extraction | same scene, reframed |
 | 7 | §8 Antialiasing | `rng` | smoothed edges |
 | 8 | §9 Diffuse Materials | `Material::Lambertian` | shadows + gamma |
 | 9 | §10 Metal | `Material::Metal` | reflective spheres |
