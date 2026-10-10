@@ -28,15 +28,12 @@ impl Image {
         self.pixels[y * self.width + x] = pixel;
     }
 
-    /// Encode as binary PPM (P6).
-    ///
-    /// The book's text writes P3, plain ASCII. P6 is the same format with a
-    /// binary payload: one quarter the size, and one `write` instead of
-    /// per-channel formatting. The book's own released `inOneWeekend` also
-    /// emits P6.
+    /// The gamma-encoded 8-bit RGB payload both encoders share.
     ///
     /// `gamma` applies the sqrt encode from §9 to each linear component.
-    pub fn write_ppm(&self, path: &Path, gamma: bool) -> Result<(), RenderError> {
+    /// Components are clamped just under 1.0 before scaling, so a fully lit
+    /// surface lands on 255 rather than wrapping to 0.
+    pub fn to_rgb_bytes(&self, gamma: bool) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.pixels.len() * 3);
         for px in &self.pixels {
             for &c in px {
@@ -44,10 +41,29 @@ impl Image {
                 out.push((256.0 * v.clamp(0.0, 0.999)) as u8);
             }
         }
+        out
+    }
+
+    /// Encode as binary PPM (P6).
+    ///
+    /// The book's text writes P3, plain ASCII. P6 is the same format with a
+    /// binary payload: one quarter the size, and one `write` instead of
+    /// per-channel formatting. The book's own released `inOneWeekend` also
+    /// emits P6.
+    pub fn write_ppm(&self, path: &Path, gamma: bool) -> Result<(), RenderError> {
         let header = format!("P6\n{} {}\n255\n", self.width, self.height);
         let mut bytes = header.into_bytes();
-        bytes.extend_from_slice(&out);
+        bytes.extend_from_slice(&self.to_rgb_bytes(gamma));
         std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    /// Encode as PNG. Same pixels as `write_ppm`, roughly a twentieth of the
+    /// size, and previewable on GitHub.
+    pub fn write_png(&self, path: &Path, gamma: bool) -> Result<(), RenderError> {
+        let rgb = self.to_rgb_bytes(gamma);
+        let png = crate::png::encode_rgb(self.width as u32, self.height as u32, &rgb);
+        std::fs::write(path, png)?;
         Ok(())
     }
 }
