@@ -414,58 +414,69 @@ mod tests {
         let image = camera.render(&world, &mut rng).unwrap();
         let width = image.width;
 
-        // Row 0 looks up: v = (7 + dv) / 8 puts y in [3/4, 1). The ball needs
-        // x^2 + y^2 <= 1/3 and x^2 >= 9/16 already, so it is missed; the
-        // ground's quadratic has both roots behind the eye, because
-        // oc . d = 100.5 y - 1 >= 74.375 > 0 with c = 101.25. So this pixel is
-        // `sky_color`, whatever the draw -- which is the point, because §9
-        // moved the draw index and the exact value is no longer predictable.
+        // Row 0 looks up: v = (7 + dv) / 8 puts y in [3/4, 1). All four spheres
+        // miss over that whole rectangle, whatever the draw.
         //
-        // Its unit y is y / |d| with y in [3/4, 1) and x^2 in [9/16, 1), so
-        // |d| is in [sqrt(17/8), sqrt(3)). The smallest unit y is
-        // 0.75 / sqrt(3) = 0.4330127 and the largest is 1 / sqrt(17/8) =
-        // 0.6859943, so a = 0.5 * (unit.y + 1) is in [0.7165064, 0.8429972).
-        // Blue is (1 - a) + a = 1, red gives up 0.5a and green 0.3a, so red is
-        // in [0.5785014, 0.6417468] and green in [0.7471008, 0.7850481]. The
-        // observed pair for seed 1 is (0.6268816, 0.7761290), comfortably
-        // inside, and the interval holds for every draw.
+        //   ground  half_b = 100.5 y - 1 >= 74.375 and c = 101.25 > 0, so
+        //           sqrtd < half_b and both roots in `Sphere::hit` are negative.
+        //   glass   the discriminant is -0.75 x^2 - 2 x - 1.75 y^2 - 0.75, and
+        //           over x in [-1, -3/4), y in [3/4, 1) its maximum is at
+        //           (x, y) = (-1, 3/4): 4 - 4.484375 = -0.484375.
+        //   blue    a = x^2 + y^2 + 1 >= 2.125 gives 1 - 0.75 a <= -0.59375.
+        //   metal   half_b = -x - 1 is at most 1/4, so half_b^2 <= 0.0625
+        //           against 1.75 a >= 3.71875.
+        //
+        // The sky pins blue at exactly 1.0, because `sky_color` returns
+        // (1 - a) + a. Its unit y is y / |d| with y in [3/4, 1) and x^2 in
+        // (9/16, 1], so it runs from 0.75 / sqrt(2.5625) = 0.46852129 to
+        // 1 / sqrt(2.5625) = 0.62469505 and a = 0.5 (unit.y + 1) over
+        // [0.73426064, 0.81234752]. Red gives up 0.5a and green 0.3a, so red is
+        // in [0.59382624, 0.63286968] and green in [0.75629574, 0.77972181].
+        // The observed pair for seed 1 is (0.60703562, 0.76422137).
         let top = image.pixels[0];
         assert_eq!(top[2], 1.0, "sky blue is exactly 1, got {top:?}");
-        assert!(top[0] >= 0.5785 && top[0] <= 0.6418, "sky red {top:?}");
-        assert!(top[1] >= 0.7471 && top[1] <= 0.7851, "sky green {top:?}");
+        assert!(
+            top[0] > 0.5935 && top[0] < 0.6332,
+            "sky red {top:?}, expected in (0.5935, 0.6332)"
+        );
+        assert!(
+            top[1] > 0.7560 && top[1] < 0.7800,
+            "sky green {top:?}, expected in (0.7560, 0.7800)"
+        );
 
-        // Row 7 looks down: v = dv / 8 puts y in [-1, -3/4) and it hits the
-        // ground, again whatever the draw -- x^2 >= 9/16 misses the ball, and
-        // oc . d = 100.5 y - 1 <= -76.375 < 0 with c = 101.25 > 0 puts a root
-        // ahead of the eye.
+        // Row 7 looks down: v = dv / 8 puts y in [-1, -3/4), and the same four
+        // checks leave the ground as the only thing there to hit. The glass's
+        // discriminant over x in [-1, -3/4), y in [-1, -3/4) still tops out at
+        // -0.484375, the blue and metal balls are out on x as above, and the
+        // ground's `t` rationalises to 101.25 / (|half_b| + sqrtd), which stays
+        // inside [0.495, 0.672] -- comfortably past `t_min` and the only hit.
         //
-        // The ground's albedo is (0.5, 0.5, 0.5), and it is the first thing this
-        // ray meets, so the pixel is the rest of the bounce chain scaled by 0.5.
-        // Every later albedo in the scene tops out at the metal ball's 0.9 and
-        // the sky tops out at 1.0, so the tightest channel is red at
-        // 0.5 * 0.9 = 0.45 -- the sky's 1.0 is out of reach and 0.5 is the
-        // ground's own albedo, which no chain can exceed. That is where the old
-        // "no albedo in the scene exceeds 0.7" argument stopped holding: §10
-        // raised the largest albedo to 0.9, and only the ground-first ordering
-        // keeps the bound true.
+        // So this pixel's first material is the ground, whose albedo §11 made
+        // (0.8, 0.8, 0.0). That fixes two things exactly rather than by bound:
         //
-        // The lower bound is `>= 0.0`, not `> 0.0`. §9's Lambertian always
-        // scattered, so a ground pixel could not be black; §10's metal absorbs,
-        // and the second hop out of the ground can now reach the ball. Zero is
-        // a legitimate value here and the 0.5 cap above is what separates
-        // ground from sky -- `sky_color` pins a sky pixel's blue to exactly 1.0.
+        //   blue is exactly 0, because the attenuation multiplies through every
+        //     remaining bounce and 0 times anything is 0. §9's neutral 0.5
+        //     could not say that, which is why the sky-versus-ground split used
+        //     to rest on a cap instead.
+        //   red and green are at most 0.8, since 0.8 is the ground's own albedo
+        //     and every albedo in the scene and every sky channel is <= 1. The
+        //     tightest downstream albedo is §11's own glass at 1.0, so the 0.8
+        //     here is the cap and not a bound on the chain.
         let bottom = image.pixels[7 * width];
+        assert_eq!(
+            bottom[2], 0.0,
+            "a ground-first pixel has no blue at all, got {bottom:?}"
+        );
         for (channel, value) in bottom.iter().enumerate() {
             assert!(
-                *value >= 0.0 && *value <= 0.5,
-                "ground channel {channel} should be in [0, 0.5], got {value} in {bottom:?}"
+                *value >= 0.0 && *value <= 0.8,
+                "ground channel {channel} should be in [0, 0.8], got {value} in {bottom:?}"
             );
         }
 
-        // Blue is the channel that tells the two apart: the sky pins it at
-        // exactly 1.0, while every ground channel is capped at the ground
-        // albedo of 0.5. Drop `let row = image_height - 1 - j;` and these two
-        // rows swap, so this comparison is what turns round.
+        // Drop `let row = image_height - 1 - j;` and these two rows swap: the
+        // sky above is pinned to blue 1.0 and the ground below to blue 0.0, so
+        // this is what turns round.
         assert!(
             top[2] > bottom[2],
             "sky should sit above ground, got top {top:?} and bottom {bottom:?}"
@@ -500,108 +511,120 @@ mod tests {
         let image = camera.render(&world, &mut rng).unwrap();
         let width = image.width;
 
-        // The ball's silhouette cuts into the horizon row. Pixel (4, 4) is the
-        // centre one: u = (4 + du) / 9 and v = (4 + dv) / 9 put the sample in
-        // [-1/9, 1/9) on both axes, so x^2 + y^2 <= 2/81, well inside the
-        // 1/3 the ball subtends, and it wins the list over the ground 100
-        // units below it.
+        // Pixel (4, 4) is the centre one, and §11's glass ball sits at
+        // column -1 so it is nowhere near it. u = (4 + du) / 9 and
+        // v = (4 + dv) / 9 put the sample in [-1/9, 1/9) on both axes, and over
+        // that box the middle ball is the only thing in range:
+        //   middle  a = x^2 + y^2 + 1 <= 1 + 2/81 and half_b = -1, so
+        //           1 - 0.75 a >= 0.23148 > 0, with t in (0.4879, 0.5189].
+        //   glass   the left ball's discriminant tops out at -0.34256 at
+        //           (-1/9, -1/9) and the right ball's at
+        //           (11/9)^2 - 1.75 = -0.51543 at x = -1/9; both negative.
+        //   ground  can be hit, but at t >= 5.3 -- the ground's `t`
+        //           rationalises to 101.25 / (|half_b| + sqrtd), and the widest
+        //           |half_b| in the box is 12.16667 at y = -1/9.
+        // So the first material is the matte blue ball, albedo (0.1, 0.2, 0.5).
         //
-        // Every pixel is a chain of albedos closing on the sky, and the sky
-        // terminates at (1 - 0.5a, 1 - 0.3a, 1) for a = 0.5 * (unit.y + 1) in
-        // [0, 1], so the terminal ratio is (5/7) <= r/g <= 1 and the terminal
-        // g / b = 1 - 0.3a is in [0.7, 1]. Multiplying those by the per-bounce
-        // ratios pins the channels:
-        //   red / green   = (9/4)^m * (terminal r / terminal g), m metal bounces
-        //   green / blue  = 4^m * (terminal g / terminal b)
-        // The ground's (0.5, 0.5, 0.5) contributes 1 to both. §9's Lambertian
-        // ball contributed 7/3 and 1, so green never led blue; §10's metal
-        // contributes 9/4 and 4, which reverses the blue comparison. So:
-        //   m = 0 gives r <= g and g <= b -- a sky or ground pixel.
-        //   m >= 1 gives r/g >= (9/4)(5/7) = 45/28 and g/b >= 4 * 0.7 = 2.8,
-        //   so r strictly leads g and g strictly leads b -- the metal ball.
-        // For seed 1 this pixel is (0.23117027, 0.14164541, 0.05000000), a
-        // metal bounce followed by a ground bounce and then the sky: blue is
-        // 0.1 * 0.5 * 1 = 0.05 exactly, and r/g = 1.632 against the 1.607
-        // floor and g/b = 2.833 against the 2.8 floor.
+        // That fixes a cap no other pixel in this column can reach: the ball is
+        // the only surface here with a red albedo below 0.8, and everything
+        // downstream of it -- glass at 1.0, the ground at 0.8, the metal at 0.8
+        // and the sky at no more than 1.0 -- only multiplies. Seed 1's pixel is
+        // (0.05500573, 0.13000688, 0.0), a glass bounce, then the yellow ground
+        // and the sky; the ground is why blue is exactly 0.
+        //
+        // The colour ordering is measured, not derived: the ball's own albedo
+        // has blue five times red, but a chain of four metal bounces reaches
+        // (4/3)^4 = 3.16 on red over green, so no seed-free claim survives.
+        // What is derived is the cap.
         let ball = image.pixels[4 * width + 4];
         assert!(
-            ball[0] > ball[1] && ball[1] > ball[2],
-            "the centre pixel should be the metal ball, got {ball:?}"
+            ball[0] <= 0.1 && ball[1] <= 0.2 && ball[2] <= 0.5,
+            "the centre pixel should be the matte ball under its own albedo, got {ball:?}"
+        );
+        assert!(
+            ball.iter().all(|c| c.is_finite()) && ball.iter().all(|c| *c >= 0.0),
+            "the centre pixel should stay finite and non-negative, got {ball:?}"
         );
 
-        // Rows 0 to 4 are all sky, whatever the draw. Along the left edge
-        // u = du / 9 puts x in [-1, -7/9), so the ball's x^2 + y^2 <= 1/3 is
-        // out of reach, and the ground's quadratic has both roots behind the
-        // eye unless 100.5 y - 1 < 0; rows 0 to 4 have y in [-1/9, 1), and at
-        // the widest the discriminant 9999 y^2 - 201 y - 100.25 - 101.25 x^2
-        // peaks at y = -1/9 with -15.72, so it is negative throughout. Every
-        // sky pixel has blue at exactly 1.0, because `sky_color` returns
-        // (1 - a) + a.
-        for row in 0..=4 {
+        // Rows 0 and 1, column 0, are sky whatever the draw. Both rectangles sit
+        // at y >= 5/9, and over x in [-1, -7/9) the glass ball's discriminant
+        // stays below zero above |y| = 0.53452248 (its widest limit, at x = -1,
+        // falling to 0.44839514 at x = -7/9). 5/9 is 0.555556, so the glass
+        // misses; the blue and metal balls are out on x, where x^2 >= 49/81;
+        // and the ground's half_b = 100.5 y - 1 stays positive, so its roots are
+        // both behind the eye.
+        //
+        // Across both rows the unit y runs from 5/9 / sqrt(2.308642) =
+        // 0.36563621 to 1 / sqrt(2.604938) = 0.61958555, giving a over
+        // [0.68281811, 0.80979278], red in [0.59510361, 0.65859095] and green
+        // in [0.75706217, 0.79515457]. Seed 1 gives (0.61003261, 0.76601957)
+        // and (0.63765310, 0.78259186).
+        for row in 0..=1 {
             let got = image.pixels[row * width];
             assert_eq!(got[2], 1.0, "row {row} should be sky, got {got:?}");
             assert!(
-                got[0] <= got[1] && got[1] <= got[2],
-                "sky is blue-leading, got {got:?}"
+                got[0] > 0.5948 && got[0] < 0.6589,
+                "row {row} red {got:?}, expected in (0.5948, 0.6589)"
+            );
+            assert!(
+                got[1] > 0.7567 && got[1] < 0.7955,
+                "row {row} green {got:?}, expected in (0.7567, 0.7955)"
             );
         }
 
-        // Rows 6 to 8 are all ground: their y runs from -1/3 down to -1, clear
-        // of the silhouette, and they miss the ball on x. The ground's albedo
-        // is a neutral 0.5 and it is the first thing each of these rays meets,
-        // so no channel can exceed 0.5. Red is the tight one -- 0.5 * 0.9, the
-        // metal ball's red -- and even that stops at 0.45. Under §8's `shade`
-        // these pixels had green above 0.999, so the cap is the assertion that
-        // fails if the material is dropped.
+        // Rows 7 and 8, column 0, are ground whatever the draw, by the same
+        // silhouette limit from below: both sit at |y| >= 5/9 = 0.555556, past
+        // the glass ball's 0.53452248, so the only surface left is the ground,
+        // at t inside [0.495, 0.672].
         //
-        // The second hop is no longer pinned down: it can reach the metal ball
-        // now, and if the ball absorbs it the pixel goes black. Seed 1 sends
-        // row 7 there -- its blue is 0.05, which is the ball's 0.1 times the
-        // ground's 0.5 -- so `>= 0.0` is the honest floor here, not `> 0.0`.
-        for row in 6..=8 {
+        // §11 made that ground (0.8, 0.8, 0.0), and a ground-first pixel is
+        // pinned exactly: blue is 0.0 for the same reason the sky's is 1.0,
+        // because the attenuation multiplies through and 0 * anything is 0.
+        // Red and green are at most 0.8, the ground's own albedo, since every
+        // later albedo and the sky itself is at most 1.
+        for row in 7..=8 {
             let got = image.pixels[row * width];
+            assert_eq!(
+                got[2], 0.0,
+                "row {row} should start on the ground, got {got:?}"
+            );
             for (channel, value) in got.iter().enumerate() {
                 assert!(
-                    *value >= 0.0 && *value <= 0.5,
-                    "row {row} channel {channel} should be in [0, 0.5], got {value} in {got:?}"
+                    *value >= 0.0 && *value <= 0.8,
+                    "row {row} channel {channel} should be in [0, 0.8], got {value} in {got:?}"
                 );
             }
-            // Blue never outruns green by more than 3/10, and that holds for
-            // every chain. The sky terminates at a green / blue of
-            // 1 - 0.3a in [0.7, 1], a ground bounce contributes a ratio of 1,
-            // and §10's metal contributes 0.4 / 0.1 = 4. So a chain that never
-            // reaches the ball keeps green / blue in [0.7, 1] and one that does
-            // lands in [4 * 0.7, 4] = [2.8, 4] -- the first is bounded below by
-            // 0.7 and the second by 2.8, so 0.7 is the floor over both.
-            //
-            // Seed 1 gives 0.7114 on row 6, 3.3249 on row 7 and 0.7233 on row
-            // 8: rows 6 and 8 never touch the ball, row 7 does. Under §9 the
-            // ball's green / blue was 1, so green never led blue for any pixel
-            // at all; §10's metal inverts that for every chain that reaches it,
-            // which is why the surviving statement is a floor and not an
-            // ordering.
+        }
+
+        // Rows 2 to 6 are the glass ball's silhouette, and unlike the rows on
+        // either side of them nothing here is pinned. Rows 3, 4 and 5 have
+        // |y| <= 1/3 = 0.33333333, inside even the narrowest silhouette limit,
+        // so those three provably start on the glass; rows 2 and 6 run from
+        // |y| = 1/3 out to 5/9 and straddle the 0.44839514 to 0.53452248 edge,
+        // so the jitter decides. And glass neither tints nor absorbs -- its
+        // attenuation is (1, 1, 1) and it has no `None` arm -- so the pixel is
+        // just whatever the rest of the chain returns, which is why seed 1
+        // gives blue 0 on row 3 (the chain reaches the ground) and blue 1 on
+        // rows 4 and 5 (it does not). All that survives is the range.
+        for row in 2..=6 {
+            let got = image.pixels[row * width];
             assert!(
-                got[1] >= 0.7 * got[2],
-                "green should be at least 0.7 of blue, got {got:?}"
+                got.iter().all(|c| c.is_finite() && *c >= 0.0 && *c <= 1.0),
+                "row {row} should stay inside [0, 1], got {got:?}"
             );
         }
 
-        // Row 5 is the one row the jitter can push either side of the
-        // silhouette: j = 3 puts v anywhere in [1/3, 4/9), so y runs from -1/3
-        // up to -1/9, and that band straddles the ground's edge between
-        // -0.1323 at x = -1 and -0.1174 at x = -7/9. So it is either sky, which
-        // pins blue at exactly 1.0, or ground, which caps it at 0.5. That is
-        // all this row can say on its own; the row mirror is pinned by rows 0
-        // to 4 pinning blue to 1.0 above and rows 6 to 8 capping it at 0.5
-        // below, which a dropped mirror would invert.
-        let middle = image.pixels[5 * width];
+        // The horizon is where the two provable blocks meet: sky pinned to blue
+        // 1.0 on rows 0 and 1, ground pinned to blue 0.0 on rows 7 and 8, and
+        // the silhouette between them. Drop `let row = image_height - 1 - j;`
+        // and the two blocks swap ends, so the ordering below is what catches it.
+        let sky = image.pixels[0][2];
+        let earth = image.pixels[8 * width][2];
+        assert_eq!(sky, 1.0);
+        assert_eq!(earth, 0.0);
         assert!(
-            middle[2] == 1.0 || middle[2] <= 0.5,
-            "row 5 is sky or ground, got {middle:?}"
-        );
-        assert!(
-            middle.iter().all(|c| c.is_finite()),
-            "row 5 should stay finite, got {middle:?}"
+            sky > earth,
+            "sky should sit above ground, got {sky} and {earth}"
         );
     }
 }
