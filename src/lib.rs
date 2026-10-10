@@ -4,6 +4,7 @@
 //! Modules appear as their chapters land; see `docs/superpowers/specs/` for the
 //! chapter-to-commit mapping.
 
+pub mod camera;
 pub mod cli;
 pub mod error;
 pub mod hittable;
