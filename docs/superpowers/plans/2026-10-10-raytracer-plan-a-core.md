@@ -29,6 +29,16 @@ These apply to every task. Read them before starting.
 - **`Image` stores pixels as `Vec<[f64; 3]>`**, never `Vec3`. `vec3` does not exist at chapter 2, and keeping the buffer type fixed means `image.rs` is never rewritten. Convert with `Vec3::to_rgb` / `Vec3::from_rgb` at the boundary.
 - **Gamma is applied at write time**, via a `gamma: bool` parameter on `write_ppm` / `write_png`, controlled by a single `renderer::GAMMA` constant. Never apply gamma during accumulation.
 - **The `< 2` dimension guard must survive every rewrite.** Fix commit `15a27ee` established that any entry point computing `i / (width - 1)` must reject `width < 2 || height < 2` with `Err(RenderError::InvalidDimension { .. })`. Without it, `--width 1` produces `0.0 / 0.0` = NaN; NaN survives `f64::clamp`, and `NaN as u8` yields 0, so the image is silently black instead of an error. **Several code blocks below were written before that fix and omit the guard — if you are replacing a render entry point wholesale, carry the guard over.** It belongs in the function that does the division, not only in `Options::parse`.
+- **Row orientation: images must be right-side-up.** The book's §4–§6 camera anchors on `lower_left_corner` (the *bottom*-left of the viewport) and counts `j` upward, so its `j = 0` row is written first — and PPM writes the first row as the top. The book therefore renders chapters 4–6 vertically mirrored. From §7 the camera anchors on `pixel00_loc` (top-left) and the bug disappears. **This project deliberately departs from the book**: mirror the write index so row 0 is the top of the viewport.
+  ```rust
+  // The book's §4-§6 camera anchors on the bottom-left corner and counts j
+  // upward, putting the bottom of the viewport in the image's top row. Mirror
+  // the write index so every image is the right way up, as chapter 7's camera
+  // onward produces naturally.
+  let row = height - 1 - j;
+  image.set(i, row, color);
+  ```
+  Do not apply this to `Camera::render` from Task 6 onward — that camera already writes rows in the correct order, and mirroring it would flip it the other way.
 
 ## File Structure
 
@@ -1658,7 +1668,7 @@ git commit -m "feat(ch06): hittable abstraction, interval, normals, scene list (
 - Produces:
   - `camera::Camera { pub image_width: usize, pub image_height: usize, pub samples_per_pixel: usize, pub max_depth: usize }` with `Camera::new(width, height, samples, depth)` and `Camera::render(&self, world: &dyn Hittable) -> Result<Image, RenderError>`
 
-**This commit is a pure refactor.** The rendered image must be visually identical to Task 5. If it differs, the extraction changed behaviour — fix it before committing.
+**This commit changes the rendered orientation on purpose.** Extracting the camera switches the anchor from the bottom-left viewport corner to `pixel00_loc` (top-left), which removes the vertical mirror the project was applying by hand. So the image will differ from Task 5: the chapter-5 image is right-side-up only because of the mirrored write index added in the orientation fix, and chapter 7 produces that same orientation natively. The difference you should see is **none** — both are right-side-up. If chapter 7's output comes out upside-down, you mirrored inside `Camera::render`; that is the bug.
 
 - [ ] **Step 1: Write `src/camera.rs`**
 

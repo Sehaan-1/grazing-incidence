@@ -30,6 +30,7 @@ Identical to Plan A, and equally binding:
 - **Gamma is applied at write time**, controlled by `renderer::GAMMA`.
 - **Determinism is not optional.** Every render seeds from `renderer::DEFAULT_SEED` unless `--seed` overrides it. If two runs with the same seed and same dimensions differ, something consumed randomness in a new place — find it.
 - **The `< 2` dimension guard must survive every rewrite.** Any entry point computing `i / (width - 1)` must reject `width < 2 || height < 2` with `Err(RenderError::InvalidDimension { .. })`. Without it, `--width 1` produces `0.0 / 0.0` = NaN; NaN survives `f64::clamp`, and `NaN as u8` yields 0, so the image is silently black instead of an error. Carried over from fix commit `15a27ee`.
+- **Row orientation: images must be right-side-up.** Chapters 4–6 mirror the write index (`let row = height - 1 - j;`) because the book's §4–§6 camera anchors on the bottom-left viewport corner. **By chapter 7 the camera anchors on `pixel00_loc` (top-left) and writes rows in the correct order naturally — do NOT mirror inside `Camera::render`, or the images flip the other way.** If you ever reintroduce a bottom-left-anchored camera, mirror its write index.
 
 ---
 
