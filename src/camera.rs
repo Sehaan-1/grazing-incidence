@@ -439,15 +439,26 @@ mod tests {
         // oc . d = 100.5 y - 1 <= -76.375 < 0 with c = 101.25 > 0 puts a root
         // ahead of the eye.
         //
-        // The ground's albedo is (0.5, 0.5, 0.5), so the pixel is the rest of
-        // the bounce chain scaled by 0.5. Every albedo in the scene tops out at
-        // 0.7 and the sky tops out at 1.0, so no channel can exceed 0.5 --
-        // where §8's `shade` put this pixel's green at 0.5 * n.y + 0.5 > 0.999.
+        // The ground's albedo is (0.5, 0.5, 0.5), and it is the first thing this
+        // ray meets, so the pixel is the rest of the bounce chain scaled by 0.5.
+        // Every later albedo in the scene tops out at the metal ball's 0.9 and
+        // the sky tops out at 1.0, so the tightest channel is red at
+        // 0.5 * 0.9 = 0.45 -- the sky's 1.0 is out of reach and 0.5 is the
+        // ground's own albedo, which no chain can exceed. That is where the old
+        // "no albedo in the scene exceeds 0.7" argument stopped holding: §10
+        // raised the largest albedo to 0.9, and only the ground-first ordering
+        // keeps the bound true.
+        //
+        // The lower bound is `>= 0.0`, not `> 0.0`. §9's Lambertian always
+        // scattered, so a ground pixel could not be black; §10's metal absorbs,
+        // and the second hop out of the ground can now reach the ball. Zero is
+        // a legitimate value here and the 0.5 cap above is what separates
+        // ground from sky -- `sky_color` pins a sky pixel's blue to exactly 1.0.
         let bottom = image.pixels[7 * width];
         for (channel, value) in bottom.iter().enumerate() {
             assert!(
-                *value > 0.0 && *value <= 0.5,
-                "ground channel {channel} should be in (0, 0.5], got {value} in {bottom:?}"
+                *value >= 0.0 && *value <= 0.5,
+                "ground channel {channel} should be in [0, 0.5], got {value} in {bottom:?}"
             );
         }
 
@@ -497,18 +508,25 @@ mod tests {
         //
         // Every pixel is a chain of albedos closing on the sky, and the sky
         // terminates at (1 - 0.5a, 1 - 0.3a, 1) for a = 0.5 * (unit.y + 1) in
-        // [0, 1], so the terminal ratio is (5/7) <= r/g <= 1. Multiplying that
-        // by the per-bounce ratios pins the channels:
-        //   red / green = (7/3)^m * (terminal r / terminal g), m ball bounces
-        //   green / blue = terminal g / terminal b  in (0, 1]
-        // The ground's (0.5, 0.5, 0.5) contributes 1 to both and the ball's
-        // (0.7, 0.3, 0.3) contributes 7/3 and 1. So green never leads blue,
-        // and red leads green exactly when the chain touched the ball:
-        // m = 0 gives at most 1, m >= 1 gives at least (7/3)(5/7) = 5/3.
+        // [0, 1], so the terminal ratio is (5/7) <= r/g <= 1 and the terminal
+        // g / b = 1 - 0.3a is in [0.7, 1]. Multiplying those by the per-bounce
+        // ratios pins the channels:
+        //   red / green   = (9/4)^m * (terminal r / terminal g), m metal bounces
+        //   green / blue  = 4^m * (terminal g / terminal b)
+        // The ground's (0.5, 0.5, 0.5) contributes 1 to both. §9's Lambertian
+        // ball contributed 7/3 and 1, so green never led blue; §10's metal
+        // contributes 9/4 and 4, which reverses the blue comparison. So:
+        //   m = 0 gives r <= g and g <= b -- a sky or ground pixel.
+        //   m >= 1 gives r/g >= (9/4)(5/7) = 45/28 and g/b >= 4 * 0.7 = 2.8,
+        //   so r strictly leads g and g strictly leads b -- the metal ball.
+        // For seed 1 this pixel is (0.23117027, 0.14164541, 0.05000000), a
+        // metal bounce followed by a ground bounce and then the sky: blue is
+        // 0.1 * 0.5 * 1 = 0.05 exactly, and r/g = 1.632 against the 1.607
+        // floor and g/b = 2.833 against the 2.8 floor.
         let ball = image.pixels[4 * width + 4];
         assert!(
-            ball[0] > ball[1] && ball[1] <= ball[2],
-            "the centre pixel should be the red ball, got {ball:?}"
+            ball[0] > ball[1] && ball[1] > ball[2],
+            "the centre pixel should be the metal ball, got {ball:?}"
         );
 
         // Rows 0 to 4 are all sky, whatever the draw. Along the left edge
@@ -530,21 +548,42 @@ mod tests {
 
         // Rows 6 to 8 are all ground: their y runs from -1/3 down to -1, clear
         // of the silhouette, and they miss the ball on x. The ground's albedo
-        // is a neutral 0.5, so every channel is the rest of the bounce chain
-        // scaled by 0.5; no albedo in the scene exceeds 0.7 and the sky caps at
-        // 1.0, so no channel can reach the sky's 1.0. Under §8's `shade` these
-        // pixels had green above 0.999, so this is the assertion that fails if
-        // the material is dropped. Green never leads blue for any pixel,
-        // whichever surfaces the chain touched.
+        // is a neutral 0.5 and it is the first thing each of these rays meets,
+        // so no channel can exceed 0.5. Red is the tight one -- 0.5 * 0.9, the
+        // metal ball's red -- and even that stops at 0.45. Under §8's `shade`
+        // these pixels had green above 0.999, so the cap is the assertion that
+        // fails if the material is dropped.
+        //
+        // The second hop is no longer pinned down: it can reach the metal ball
+        // now, and if the ball absorbs it the pixel goes black. Seed 1 sends
+        // row 7 there -- its blue is 0.05, which is the ball's 0.1 times the
+        // ground's 0.5 -- so `>= 0.0` is the honest floor here, not `> 0.0`.
         for row in 6..=8 {
             let got = image.pixels[row * width];
             for (channel, value) in got.iter().enumerate() {
                 assert!(
-                    *value > 0.0 && *value <= 0.5,
-                    "row {row} channel {channel} should be in (0, 0.5], got {value} in {got:?}"
+                    *value >= 0.0 && *value <= 0.5,
+                    "row {row} channel {channel} should be in [0, 0.5], got {value} in {got:?}"
                 );
             }
-            assert!(got[1] <= got[2], "green never leads blue, got {got:?}");
+            // Blue never outruns green by more than 3/10, and that holds for
+            // every chain. The sky terminates at a green / blue of
+            // 1 - 0.3a in [0.7, 1], a ground bounce contributes a ratio of 1,
+            // and §10's metal contributes 0.4 / 0.1 = 4. So a chain that never
+            // reaches the ball keeps green / blue in [0.7, 1] and one that does
+            // lands in [4 * 0.7, 4] = [2.8, 4] -- the first is bounded below by
+            // 0.7 and the second by 2.8, so 0.7 is the floor over both.
+            //
+            // Seed 1 gives 0.7114 on row 6, 3.3249 on row 7 and 0.7233 on row
+            // 8: rows 6 and 8 never touch the ball, row 7 does. Under §9 the
+            // ball's green / blue was 1, so green never led blue for any pixel
+            // at all; §10's metal inverts that for every chain that reaches it,
+            // which is why the surviving statement is a floor and not an
+            // ordering.
+            assert!(
+                got[1] >= 0.7 * got[2],
+                "green should be at least 0.7 of blue, got {got:?}"
+            );
         }
 
         // Row 5 is the one row the jitter can push either side of the

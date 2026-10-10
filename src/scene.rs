@@ -28,7 +28,7 @@ pub fn build(scene: Scene) -> Vec<Box<dyn Hittable>> {
             let ball = Sphere::new(
                 Vec3::new(0.0, 0.0, -1.0),
                 0.5,
-                Material::lambertian(Vec3::new(0.7, 0.3, 0.3)),
+                Material::metal(Vec3::new(0.9, 0.4, 0.1), 0.0),
             );
             vec![Box::new(ground), Box::new(ball)]
         }
