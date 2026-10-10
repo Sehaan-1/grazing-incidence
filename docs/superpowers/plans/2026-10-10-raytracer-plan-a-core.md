@@ -28,6 +28,7 @@ These apply to every task. Read them before starting.
 - **Do not touch `docs/superpowers/specs/`.** It is the approved design; this plan implements it.
 - **`Image` stores pixels as `Vec<[f64; 3]>`**, never `Vec3`. `vec3` does not exist at chapter 2, and keeping the buffer type fixed means `image.rs` is never rewritten. Convert with `Vec3::to_rgb` / `Vec3::from_rgb` at the boundary.
 - **Gamma is applied at write time**, via a `gamma: bool` parameter on `write_ppm` / `write_png`, controlled by a single `renderer::GAMMA` constant. Never apply gamma during accumulation.
+- **The `< 2` dimension guard must survive every rewrite.** Fix commit `15a27ee` established that any entry point computing `i / (width - 1)` must reject `width < 2 || height < 2` with `Err(RenderError::InvalidDimension { .. })`. Without it, `--width 1` produces `0.0 / 0.0` = NaN; NaN survives `f64::clamp`, and `NaN as u8` yields 0, so the image is silently black instead of an error. **Several code blocks below were written before that fix and omit the guard — if you are replacing a render entry point wholesale, carry the guard over.** It belongs in the function that does the division, not only in `Options::parse`.
 
 ## File Structure
 
