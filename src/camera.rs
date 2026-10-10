@@ -7,52 +7,160 @@ use crate::ray::Ray;
 use crate::rng::Rng;
 use crate::vec3::Vec3;
 
-/// A pinhole camera (§7). Position and orientation become settable in §12.
+/// The book's Â§12 listing, split into constants so `chapter_twelve`, the
+/// renderer and the CLI all read the framing off one place instead of each
+/// restating it.
+pub const CHAPTER_TWELVE_WIDTH: usize = 400;
+pub const CHAPTER_TWELVE_SAMPLES: usize = 100;
+pub const CHAPTER_TWELVE_DEPTH: usize = 50;
+pub const CHAPTER_TWELVE_ASPECT: f64 = 16.0 / 9.0;
+pub const CHAPTER_TWELVE_VFOV: f64 = 90.0;
+pub const CHAPTER_TWELVE_LOOKFROM: Vec3 = Vec3::new(-2.0, 2.0, 1.0);
+pub const CHAPTER_TWELVE_LOOKAT: Vec3 = Vec3::new(0.0, 0.0, -1.0);
+pub const CHAPTER_TWELVE_VUP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
+
+/// A pinhole camera (Â§7), positioned and aimed from Â§12.
+///
+/// Â§12 is where the image stops being a fixed viewport seen from the origin.
+/// The eye moves to `lookfrom`, the frame is built out of `lookat` and `vup`
+/// instead of out of the world axes, and the vertical field of view becomes a
+/// number rather than the implicit `viewport_height = 2`.
+///
+/// The orientation changed with it. Â§4-Â§7 anchored on the *bottom*-left
+/// viewport corner and counted `j` upward, so `j = 0` was the bottom of the
+/// picture and `render` had to mirror its write index. Â§12 anchors on
+/// `pixel00_loc` -- the *top*-left -- and its `pixel_delta_v` already points
+/// down, because `viewport_v = viewport_height * -v` flips the camera's own up
+/// vector. So `j = 0` is the top row and no mirror is needed. `render` writes
+/// `(i, j)` straight through; see `render`.
 pub struct Camera {
     pub image_width: usize,
-    pub image_height: usize,
     pub samples_per_pixel: usize,
     pub max_depth: usize,
+    pub aspect_ratio: f64,
+    pub vfov: f64,
+    pub lookfrom: Vec3,
+    pub lookat: Vec3,
+    pub vup: Vec3,
 
-    origin: Vec3,
-    horizontal: Vec3,
-    vertical: Vec3,
-    lower_left_corner: Vec3,
+    pub image_height: usize,
+    pixel00_loc: Vec3,
+    pixel_delta_u: Vec3,
+    pixel_delta_v: Vec3,
+
+    /// The camera frame (Â§12). `w` points from `lookat` back to `lookfrom`, `u`
+    /// runs right across the picture and `v` runs up it; all three are unit
+    /// and mutually perpendicular. They are kept on the camera rather than
+    /// discarded at construction so the frame can be inspected.
+    pub u: Vec3,
+    pub v: Vec3,
+    pub w: Vec3,
 }
 
 impl Camera {
+    /// Â§12's height rule, on its own: `image_width / aspect_ratio`, truncated
+    /// toward zero, then floored at 1.
+    ///
+    /// The floor is what stops a very wide viewport -- or a very small width --
+    /// from asking for a zero-row image. The CLI needs this before it has a
+    /// `Camera` to ask, which is why it lives here rather than inline in
+    /// `new`.
+    pub fn derived_height(image_width: usize, aspect_ratio: f64) -> usize {
+        ((image_width as f64 / aspect_ratio) as usize).max(1)
+    }
+
+    /// Build the camera frame (Â§12).
+    ///
+    /// `lookfrom` is the eye, `lookat` the point it looks at and `vup` the
+    /// world direction that counts as "up" in the picture. `vfov` is the
+    /// vertical field of view in degrees; the horizontal one follows from
+    /// `aspect_ratio`, so the caller gives a width and gets a height.
+    ///
+    /// `u`, `v` and `w` are the orthonormal frame the picture is drawn in:
+    /// `w` points back from the target toward the eye, `u` runs right and `v`
+    /// runs up. The view's `viewport_v` is `viewport_height * -v`, so image
+    /// rows increase downward.
     pub fn new(
         image_width: usize,
-        image_height: usize,
         samples_per_pixel: usize,
         max_depth: usize,
+        aspect_ratio: f64,
+        vfov: f64,
+        lookfrom: Vec3,
+        lookat: Vec3,
+        vup: Vec3,
     ) -> Self {
-        let viewport_height = 2.0;
+        let image_height = Self::derived_height(image_width, aspect_ratio);
+
+        // Â§12: the eye is `focal_length` in front of the target, and the
+        // viewport is the plane of width `2 h focal_length` at the eye,
+        // half-angles at the edges of `vfov`.
+        let focal_length = (lookfrom - lookat).length();
+        let theta = crate::degrees_to_radians(vfov);
+        let h = (theta / 2.0).tan();
+        let viewport_height = 2.0 * h * focal_length;
         let viewport_width = viewport_height * (image_width as f64 / image_height as f64);
-        let origin = Vec3::ZERO;
-        let horizontal = Vec3::new(viewport_width, 0.0, 0.0);
-        let vertical = Vec3::new(0.0, viewport_height, 0.0);
-        let lower_left_corner =
-            origin - horizontal / 2.0 - vertical / 2.0 - Vec3::new(0.0, 0.0, 1.0);
+
+        let w = (lookfrom - lookat).unit();
+        let u = vup.cross(w).unit();
+        let v = w.cross(u);
+
+        let viewport_u = viewport_width * u;
+        let viewport_v = viewport_height * -v;
+
+        let pixel_delta_u = viewport_u / image_width as f64;
+        let pixel_delta_v = viewport_v / image_height as f64;
+
+        // The upper *left* corner, then the centre of pixel (0, 0). This is
+        // the half-pixel the book's `0.5 *` exists for: without it, pixel (0, 0)
+        // would be sampled at the corner rather than the middle of its square.
+        let viewport_upper_left = lookfrom - focal_length * w - viewport_u / 2.0 - viewport_v / 2.0;
+        let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
         Self {
             image_width,
-            image_height,
             samples_per_pixel,
             max_depth,
-            origin,
-            horizontal,
-            vertical,
-            lower_left_corner,
+            aspect_ratio,
+            vfov,
+            lookfrom,
+            lookat,
+            vup,
+            image_height,
+            pixel00_loc,
+            pixel_delta_u,
+            pixel_delta_v,
+            u,
+            v,
+            w,
         }
     }
 
-    /// Cast one ray per sample through the viewport and shade it (§6, §7, §8).
+    /// The Â§12 listing: 400px wide, 16:9, a 90-degree lens from (-2, 2, 1)
+    /// looking at the origin's -z end.
+    pub fn chapter_twelve() -> Self {
+        Self::new(
+            CHAPTER_TWELVE_WIDTH,
+            CHAPTER_TWELVE_SAMPLES,
+            CHAPTER_TWELVE_DEPTH,
+            CHAPTER_TWELVE_ASPECT,
+            CHAPTER_TWELVE_VFOV,
+            CHAPTER_TWELVE_LOOKFROM,
+            CHAPTER_TWELVE_LOOKAT,
+            CHAPTER_TWELVE_VUP,
+        )
+    }
+
+    /// Cast one ray per sample through the viewport and shade it (Â§6, Â§7, Â§8).
     ///
     /// Every sample is a fresh jittered ray from `rng`, so the same generator
     /// state replays the same image and the test suite can assert on exact
     /// pixel values. `renderer::render_scene` owns the dimension check;
     /// `new` returns `Self`, not a `Result`.
+    ///
+    /// Row `j` is written to image row `j`, unmirrored. Â§12 anchored the
+    /// viewport on `pixel00_loc`, the top-left, and gave the camera a downward
+    /// `pixel_delta_v`, so `j = 0` is already the top of the picture.
     pub fn render(&self, world: &dyn Hittable, rng: &mut Rng) -> Result<Image, RenderError> {
         let mut image = Image::new(self.image_width, self.image_height)?;
 
@@ -61,15 +169,12 @@ impl Camera {
             for i in 0..self.image_width {
                 let mut color = Vec3::ZERO;
                 for _ in 0..self.samples_per_pixel {
-                    let ray = self.get_ray(i, j, rng);
+                    let du = rng.range(0.0, 1.0);
+                    let dv = rng.range(0.0, 1.0);
+                    let ray = self.get_ray(i, j, du, dv);
                     color += self.ray_color(&ray, self.max_depth, world, rng);
                 }
-                // The book's §4-§7 camera anchors on the bottom-left viewport
-                // corner and counts j upward, so j = 0 lands in the image's top
-                // row. Mirror the write index to keep every image right-side-up.
-                // §12 re-anchors on `pixel00_loc`, at which point this comes out.
-                let row = self.image_height - 1 - j;
-                image.set(i, row, (color / self.samples_per_pixel as f64).to_rgb());
+                image.set(i, j, (color / self.samples_per_pixel as f64).to_rgb());
             }
         }
         eprintln!("\rDone.                 ");
@@ -77,28 +182,26 @@ impl Camera {
         Ok(image)
     }
 
-    /// A camera ray for pixel (i, j), jittered within the pixel (§8).
+    /// A camera ray through pixel (i, j), offset by the (du, dv) sample.
     ///
-    /// The sample lands at `(i + du) / image_width` with `du` uniform on
-    /// `[0, 1)`, so `i + du` runs over `[i, i + 1)` and `width` samples cover
-    /// the viewport edge to edge. Normalising by `width - 1` instead would push
-    /// the last row and column past the far edge -- pixel 7 of an 8-wide camera
-    /// would reach `u = (7 + du) / 7`, which is at least 1 -- and would leave
-    /// the first row and column a full sample short of the near edge. The
-    /// book makes the same change.
-    fn get_ray(&self, i: usize, j: usize, rng: &mut Rng) -> Ray {
-        let du = rng.range(0.0, 1.0);
-        let dv = rng.range(0.0, 1.0);
-        let u = (i as f64 + du) / self.image_width as f64;
-        let v = (j as f64 + dv) / self.image_height as f64;
-
-        Ray::new(
-            self.origin,
-            self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin,
-        )
+    /// The sample lands at `(i + du) / image_width` and `(j + dv) /
+    /// image_height` across the viewport, so `i + du` runs over `[i, i + 1)` and
+    /// `image_width` samples cover the viewport edge to edge. Normalising by
+    /// `image_width - 1` instead would push the last row and column past the
+    /// far edge -- pixel 7 of an 8-wide camera would reach `u = (7 + du) / 7`,
+    /// which is at least 1 -- and would leave the first row and column a full
+    /// sample short of the near edge. The book makes the same choice.
+    ///
+    /// `j` counts *down*. That is the whole of Â§12's orientation change and it
+    /// is why `render` no longer mirrors its write index.
+    pub fn get_ray(&self, i: usize, j: usize, du: f64, dv: f64) -> Ray {
+        let pixel_sample = self.pixel00_loc
+            + self.pixel_delta_u * (i as f64 + du)
+            + self.pixel_delta_v * (j as f64 + dv);
+        Ray::new(self.lookfrom, pixel_sample - self.lookfrom)
     }
 
-    /// Shade one ray: a hit bounces off its material, a miss is the sky (§9).
+    /// Shade one ray: a hit bounces off its material, a miss is the sky (Â§9).
     ///
     /// `depth` counts the bounces still available, so a camera with none left
     /// renders black. Every bounce draws from `rng`, the same generator that
@@ -108,7 +211,7 @@ impl Camera {
             return Vec3::ZERO;
         }
 
-        // §9: a t_min of 0.001 skips the self-intersection that floating-point
+        // Â§9: a t_min of 0.001 skips the self-intersection that floating-point
         // rounding introduces. This is the "shadow acne" the book fixes here.
         if let Some(rec) = world.hit(ray, 0.001, f64::INFINITY) {
             if let Some((scattered, attenuation)) = rec.material.scatter(ray, &rec, rng) {
@@ -121,7 +224,7 @@ impl Camera {
     }
 }
 
-/// The sky: white at the horizon, blue overhead (§4).
+/// The sky: white at the horizon, blue overhead (Â§4).
 fn sky_color(direction: Vec3) -> Vec3 {
     let unit_direction = direction.unit();
     let a = 0.5 * (unit_direction.y + 1.0);
@@ -137,7 +240,28 @@ mod tests {
     /// The seed the pixel-exact tests below are derived against.
     const SEED: u64 = 1;
 
-    /// The §6 world. `HittableList` borrows the objects, so the caller has to
+    /// A camera on the book's axis: eye at the origin, looking down -z, +y up,
+    /// a 90-degree lens.
+    ///
+    /// Every test that needs a closed form uses this one, because a frame
+    /// aligned with the world axes can be worked out on paper. Â§12's own
+    /// framing is tested through `Camera::chapter_twelve`, where the frame is
+    /// oblique and only its invariants -- orthonormality, ordering -- survive
+    /// without a render.
+    fn axis_camera(image_width: usize, samples: usize, depth: usize, aspect: f64) -> Camera {
+        Camera::new(
+            image_width,
+            samples,
+            depth,
+            aspect,
+            90.0,
+            Vec3::ZERO,
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+    }
+
+    /// The Â§6 world. `HittableList` borrows the objects, so the caller has to
     /// hold them alive for as long as the list is used.
     fn test_world<'a>(objects: &'a [Box<dyn Hittable>]) -> HittableList<'a> {
         let mut list = HittableList::new();
@@ -148,12 +272,12 @@ mod tests {
     }
 
     /// A world with nothing in it, so every ray misses and every sample costs
-    /// exactly the two draws `get_ray` makes.
+    /// exactly the two draws `render` makes before `get_ray`.
     ///
-    /// This is what keeps the pixel-exact tests below exact. §9 gave the
+    /// This is what keeps the pixel-exact tests below exact. Â§9 gave the
     /// generator a second job: a scattered ray draws from the same `Rng` that
     /// places the samples, and how many draws that costs depends on the path
-    /// the ray takes. Against the §6 scene, pixel (i, j)'s `du` is no longer at
+    /// the ray takes. Against the Â§6 scene, pixel (i, j)'s `du` is no longer at
     /// a fixed offset into the stream, because every pixel ahead of it may have
     /// spent a different number of draws. Against an empty world the
     /// arithmetic in `draw` and `first_draw` holds exactly.
@@ -162,9 +286,9 @@ mod tests {
     }
 
     /// The book's normal colour map: each normal component maps from [-1, 1] to
-    /// [0, 1] (§6.1, unchanged through §7).
+    /// [0, 1] (Â§6.1, unchanged through Â§7).
     ///
-    /// §9 replaced this with `Material::scatter`, so nothing in the renderer
+    /// Â§9 replaced this with `Material::scatter`, so nothing in the renderer
     /// calls it any more. It stays here, in the tests, because the test below
     /// still pins what the map did.
     fn shade(normal: Vec3) -> Vec3 {
@@ -187,7 +311,7 @@ mod tests {
     /// column `i`, then sample, two draws per ray, `du` before `dv` -- so any
     /// one sample can be reproduced without rendering the whole image, as long
     /// as the world draws nothing of its own. Against `empty_world` that holds;
-    /// against the §6 scene it does not, because §9 spends extra draws per
+    /// against the Â§6 scene it does not, because Â§9 spends extra draws per
     /// scatter.
     fn draw(seed: u64, n: usize) -> f64 {
         let mut rng = Rng::seed_from_u64(seed);
@@ -213,43 +337,139 @@ mod tests {
         for _ in 0..first_draw(camera, i, j) + 2 * k {
             rng.f64();
         }
-        camera.get_ray(i, j, &mut rng)
+        let du = rng.range(0.0, 1.0);
+        let dv = rng.range(0.0, 1.0);
+        camera.get_ray(i, j, du, dv)
     }
 
     #[test]
     fn render_produces_the_requested_pixel_count() {
         let objects = scene::build(Scene::Spheres);
         let world = test_world(&objects);
-        let camera = Camera::new(20, 12, 1, 2);
-        let mut rng = Rng::seed_from_u64(SEED);
-        let image = camera.render(&world, &mut rng).unwrap();
+        // 20 / (20/12) = 12 exactly, so the height comes back as asked for.
+        let camera = axis_camera(20, 1, 2, 20.0 / 12.0);
+        let image = camera
+            .render(&world, &mut Rng::seed_from_u64(SEED))
+            .unwrap();
         assert_eq!(image.pixels.len(), 20 * 12);
         assert_eq!(image.width, 20);
         assert_eq!(image.height, 12);
     }
 
     #[test]
-    fn jittered_rays_land_inside_their_own_pixel() {
-        // A sample sits at ((i + du) / width, (j + dv) / height) with du, dv
-        // uniform on [0, 1), so u is in [i / width, (i + 1) / width): it never
-        // reaches 1, and the far row and column stop just short of the far
-        // edge. On an 8x8 camera `viewport_width` is 2 * (8 / 8) = 2 and
-        // `viewport_height` is 2, so the viewport spans x and y in [-1, 1) and
-        // the eye is the zero vector, which makes the direction itself the
-        // viewport point.
+    fn height_follows_from_the_aspect_ratio() {
+        let camera = Camera::chapter_twelve();
+        assert_eq!(camera.image_width, 400);
+        // 400 / (16/9) = 225 exactly in f64 -- verified, not assumed -- and
+        // truncating it gives 225 rows for the book's 400x225 frame.
+        assert_eq!(400.0_f64 / (16.0_f64 / 9.0), 225.0);
+        assert_eq!(camera.image_height, 225);
+    }
+
+    #[test]
+    fn derived_height_floors_at_one() {
+        // 1 / 1000 = 0.001, which truncates to 0.
+        assert_eq!(Camera::derived_height(1, 1000.0), 1);
+        assert_eq!(Camera::derived_height(400, 16.0 / 9.0), 225);
+    }
+
+    #[test]
+    fn camera_frame_vectors_are_orthonormal() {
+        // lookfrom - lookat = (-2, 2, 2), length sqrt(12) = 2 sqrt(3), so
+        //     w = (-1, 1, 1) / sqrt(3)
+        // vup x w = (1/sqrt(3), 0, 1/sqrt(3)), length sqrt(2/3), so
+        //     u = (1, 0, 1) / sqrt(2)
+        // and w x u = (1, 2, -1) / sqrt(6), whose squared length is
+        // (1 + 4 + 1) / 6 = 1 with no rescale needed.
         //
-        // Normalising by `width - 1` instead would break this: pixel 7 would
-        // sit at u = (7 + du) / 7, which is at least 1.
-        let camera = Camera::new(8, 8, 64, 5);
-        let mut rng = Rng::seed_from_u64(SEED);
+        // Each dot product cancels by pairing the equal and opposite terms:
+        //   u . v = (1/2)(1/sqrt(6)) + 0 + (1/2)(-1/sqrt(6)) = 0
+        //   u . w = -(1/sqrt(6)) + 0 + (1/sqrt(6))         = 0
+        //   v . w = -(1/sqrt(18)) + 2/sqrt(18) - 1/sqrt(18) = 0
+        let camera = Camera::chapter_twelve();
+        let (u, v, w) = (camera.u, camera.v, camera.w);
+
+        assert!((u.length() - 1.0).abs() < 1e-9, "u is not unit: {:?}", u);
+        assert!((v.length() - 1.0).abs() < 1e-9, "v is not unit: {:?}", v);
+        assert!((w.length() - 1.0).abs() < 1e-9, "w is not unit: {:?}", w);
+        assert!(u.dot(v).abs() < 1e-9, "u . v = {}", u.dot(v));
+        assert!(u.dot(w).abs() < 1e-9, "u . w = {}", u.dot(w));
+        assert!(v.dot(w).abs() < 1e-9, "v . w = {}", v.dot(w));
+
+        // The derived form of the same frame. If `u` lost its `.unit()`, or `v`
+        // stopped being `w x u`, this is what notices.
+        let root2 = 2.0_f64.sqrt();
+        let root3 = 3.0_f64.sqrt();
+        let root6 = 6.0_f64.sqrt();
+        assert_vec_close(w, Vec3::new(-1.0 / root3, 1.0 / root3, 1.0 / root3));
+        assert_vec_close(u, Vec3::new(1.0 / root2, 0.0, 1.0 / root2));
+        assert_vec_close(v, Vec3::new(1.0 / root6, 2.0 / root6, -1.0 / root6));
+    }
+
+    #[test]
+    fn aspect_ratio_never_yields_a_zero_height() {
+        let camera = axis_camera(1, 1, 1, 1000.0);
+        assert_eq!(camera.image_height, 1);
+    }
+
+    #[test]
+    fn a_narrower_lens_shrinks_the_viewport() {
+        // focal_length = |(-2, 2, 1) - (0, 0, -1)| = |(-2, 2, 2)| = sqrt(12).
+        // viewport_height = 2 tan(vfov / 2) sqrt(12), and
+        //     |pixel_delta_u| = viewport_width / image_width
+        //                    = viewport_height * (image_width / image_height) / image_width
+        //                    = viewport_height / image_height
+        // so the two pixel widths should land on that closed form, with the
+        // 20-degree one well under the 90-degree one.
+        let lookfrom = Vec3::new(-2.0, 2.0, 1.0);
+        let lookat = Vec3::new(0.0, 0.0, -1.0);
+        let vup = Vec3::new(0.0, 1.0, 0.0);
+        let narrow = Camera::new(400, 1, 1, 16.0 / 9.0, 20.0, lookfrom, lookat, vup);
+        let wide = Camera::new(400, 1, 1, 16.0 / 9.0, 90.0, lookfrom, lookat, vup);
+
+        let expected = |vfov: f64| {
+            2.0 * (crate::degrees_to_radians(vfov) / 2.0).tan() * 12.0_f64.sqrt() / 225.0
+        };
+        assert!((wide.pixel_delta_u.length() - expected(90.0)).abs() < 1e-12);
+        assert!((narrow.pixel_delta_u.length() - expected(20.0)).abs() < 1e-12);
+        assert!(
+            narrow.pixel_delta_u.length() < wide.pixel_delta_u.length(),
+            "a 20-degree lens should cover fewer pixels than a 90-degree one"
+        );
+    }
+
+    #[test]
+    fn jittered_rays_land_inside_their_own_pixel() {
+        // An 8x8 axis camera. focal_length = 1, w = (0, 0, 1), u = (1, 0, 0),
+        // v = (0, 1, 0), viewport_height = 2 and viewport_width = 2, so
+        //     pixel_delta_u = (1/4, 0, 0)  and  pixel_delta_v = (0, -1/4, 0)
+        //     viewport_upper_left = (0,0,0) - (0,0,1) - (1,0,0) - (0,-1,0)
+        //                         = (-1, 1, -1)
+        //     pixel00_loc = (-1, 1, -1) + (1/8, -1/8, 0) = (-7/8, 7/8, -1)
+        // and the ray for (i, j, du, dv) points at
+        //     (-7/8 + (i + du)/4,  7/8 - (j + dv)/4,  -1).
+        //
+        // The half-pixel offset is why x starts at -7/8 rather than -1: pixel
+        // (0, 0) is sampled at the middle of its square, not its corner.
+        let camera = axis_camera(8, 8, 5, 1.0);
         for j in 0..camera.image_height {
             for i in 0..camera.image_width {
-                for _ in 0..camera.samples_per_pixel {
-                    let dir = camera.get_ray(i, j, &mut rng).direction;
+                for k in 0..camera.samples_per_pixel {
+                    let dir = sample_ray(&camera, SEED, i, j, k).direction;
+                    // Column 0 starts at -7/8; the last column stops short of
+                    // the far edge at 9/8, because `du < 1`.
                     assert!(
-                        dir.x >= -1.0 && dir.x < 1.0 && dir.y >= -1.0 && dir.y < 1.0,
-                        "sample for pixel ({i}, {j}) left the viewport: {dir:?}"
+                        dir.x >= -0.875 && dir.x < 1.125,
+                        "sample for pixel ({i}, {j}) left the viewport in x: {dir:?}"
                     );
+                    // Row 0 stops at 7/8 and row 7 runs down past -1, because
+                    // `pixel_delta_v` is negative. The bound is asymmetric and
+                    // that asymmetry is the orientation.
+                    assert!(
+                        dir.y > -1.125 && dir.y <= 0.875,
+                        "sample for pixel ({i}, {j}) left the viewport in y: {dir:?}"
+                    );
+                    // Nothing in the frame tilts, so z is exactly -1.
                     close(dir.z, -1.0);
                 }
             }
@@ -257,16 +477,77 @@ mod tests {
     }
 
     #[test]
+    fn larger_j_points_lower() {
+        // The orientation, stated as a property of the camera rather than of a
+        // rendered pixel: one row down, one pixel down, no mirror anywhere.
+        //
+        // `t = tan(90 deg / 2)` is 0.9999999999999999, not 1 -- the closest
+        // f64 to tan(pi/4) is one ulp low -- so every constant below is
+        // written in terms of `t` rather than as a decimal:
+        //     viewport_height   = 2 t          pixel_delta_v = -2 t / 8 = -t/4
+        //     viewport_u width  = 2 t          pixel_delta_u =  2 t / 8 =  t/4
+        //     upper-left x      = -t           upper-left y  =  t
+        //     pixel00_loc       = (-7t/8, 7t/8, -1)
+        // so a ray through (i, j) with sample (du, dv) points at
+        //     (t (-7/8 + (i + du)/4),  t (7/8 - (j + dv)/4),  -1).
+        let t = (crate::degrees_to_radians(90.0) / 2.0).tan();
+        let camera = axis_camera(8, 1, 5, 1.0);
+        let x = |i: usize, du: f64| t * (-7.0 / 8.0 + (i as f64 + du) / 4.0);
+        let y = |j: usize, dv: f64| t * (7.0 / 8.0 - (j as f64 + dv) / 4.0);
+
+        // §12 flips the frame: `viewport_v = viewport_height * -v` makes the row
+        // step negative, so `j` counts down and the last row is the bottom.
+        assert!(
+            camera.pixel_delta_v.y < 0.0,
+            "j must count downward, got {:?}",
+            camera.pixel_delta_v
+        );
+        assert!(camera.pixel_delta_u.x > 0.0, "`u` still runs right");
+
+        for (i, j, du, dv) in [
+            (3usize, 0usize, 0.25, 0.25),
+            (3, 1, 0.25, 0.25),
+            (3, 7, 0.25, 0.25),
+        ] {
+            let dir = camera.get_ray(i, j, du, dv).direction;
+            close(dir.x, x(i, du));
+            close(dir.y, y(j, dv));
+        }
+
+        // One row is exactly one pixel step down, and the whole image is
+        // `image_height` of them.
+        let top = camera.get_ray(3, 0, 0.25, 0.25).direction;
+        let below = camera.get_ray(3, 1, 0.25, 0.25).direction;
+        let bottom = camera.get_ray(3, 7, 0.25, 0.25).direction;
+        close(below.y - top.y, -t / 4.0);
+        close(bottom.y - top.y, -7.0 * t / 4.0);
+        assert!(top.y > below.y && below.y > bottom.y);
+
+        // Right is still right: `pixel_delta_u` keeps the sign of `u`.
+        let left = camera.get_ray(0, 3, 0.5, 0.5).direction;
+        let right = camera.get_ray(7, 3, 0.5, 0.5).direction;
+        close(left.x, x(0, 0.5));
+        close(right.x, x(7, 0.5));
+        close(right.x - left.x, 7.0 * t / 4.0);
+    }
+
+    #[test]
     fn the_viewport_follows_the_image_aspect_ratio() {
-        // Pixel (0, 0) is the very first one `render` draws, so its `du` and
-        // `dv` are the first two values the seed yields no matter what world is
-        // in play -- nothing runs ahead of it. Against `empty_world` the pixel
-        // is background, which is what lets the closed form below stand in for
-        // the shading.
+        // A 20-wide camera on 20:12. focal_length = 1 and viewport_height =
+        // 2 tan(90/2), so viewport_width = 2 tan(90/2) * 20/12 and
+        //     pixel_delta_u = (1/6, 0, 0)  and  pixel_delta_v = (0, -1/6, 0)
+        //     viewport_upper_left = (-5/3, 1, -1)
+        //     pixel00_loc = (-5/3, 1, -1) + (1/12, -1/12, 0) = (-19/12, 11/12, -1)
+        // up to the same one-ulp-low tan(pi/4) that `larger_j_points_lower`
+        // works around, which `close`'s 1e-9 more than covers.
+        //
+        // Pixel (0, 0)'s ray therefore points at
+        //     (-19/12 + du/6,  11/12 - dv/6,  -1).
         let world = empty_world();
-        let camera = Camera::new(20, 12, 1, 5);
-        let mut rng = Rng::seed_from_u64(SEED);
-        let image = camera.render(&world, &mut rng).unwrap();
+        let camera = axis_camera(20, 1, 5, 20.0 / 12.0);
+        let image = camera
+            .render(&world, &mut Rng::seed_from_u64(SEED))
+            .unwrap();
 
         // One sample per pixel and (0, 0) is pixel 0 of the loop, so its draws
         // are numbers 0 and 1 of the stream.
@@ -275,50 +556,39 @@ mod tests {
         let du = draw(SEED, n);
         let dv = draw(SEED, n + 1);
 
-        // The viewport is `viewport_height = 2` tall and
-        // `viewport_width = 2 * (20 / 12) = 10/3` wide, anchored one unit in
-        // front of the zero eye, so `lower_left_corner` is (-5/3, -1, -1) and
-        // the direction is `lower_left_corner + horizontal * u + vertical * v`:
-        //   u = (0 + du) / 20   in [0, 1/20), so x = -5/3 + (10/3) u in [-5/3, -3/2)
-        //   v = (0 + dv) / 12   in [0, 1/12),  so y = -1 + 2 v    in [-1, -5/6)
-        let u = du / 20.0;
-        let v = dv / 12.0;
-        let direction = Vec3::new(-5.0 / 3.0 + (10.0 / 3.0) * u, -1.0 + 2.0 * v, -1.0);
-        assert_vec_close(
-            camera
-                .get_ray(0, 0, &mut Rng::seed_from_u64(SEED))
-                .direction,
-            direction,
-        );
+        let direction = Vec3::new(-19.0 / 12.0 + du / 6.0, 11.0 / 12.0 - dv / 6.0, -1.0);
+        assert_vec_close(camera.get_ray(0, 0, du, dv).direction, direction);
 
         // a = 0.5 * (unit.y + 1): blue is (1 - a) + a = 1, red gives up 0.5a
-        // and green 0.3a.
-        // `j = 0` is the viewport's bottom row and the mirror puts it at the
-        // image's last row, so the pixel lands at index 11 * 20.
-        let row = camera.image_height - 1;
-        assert_vec_close(
-            Vec3::from_rgb(image.pixels[row * image.width]),
+        // and green 0.3a. Pixel (0, 0) is the viewport's top-left square, so
+        // Â§12 writes it to image row 0 with no mirror.
+        assert_eq!(
+            Vec3::from_rgb(image.pixels[0]),
             sky_color(direction),
+            "the top-left pixel should be the sky in the top-left sample"
         );
+        // 11/12 - dv/6 is at least 11/12 - 1/6 = 3/4, so this ray points up and
+        // the miss really is the sky rather than the ground.
+        assert!(direction.y > 0.75);
     }
 
     #[test]
     fn multiple_samples_average_jittered_rays() {
-        // An empty world, so each sample costs exactly the two draws
-        // `get_ray` makes and `first_draw` still locates every sample.
+        // An empty world, so each sample costs exactly the two draws `render`
+        // makes and `first_draw` still locates every sample.
         let world = empty_world();
 
         let mut rng = Rng::seed_from_u64(SEED);
-        let once = Camera::new(8, 8, 1, 5).render(&world, &mut rng).unwrap();
+        let once = axis_camera(8, 1, 5, 1.0).render(&world, &mut rng).unwrap();
         let mut rng = Rng::seed_from_u64(SEED);
-        let four = Camera::new(8, 8, 4, 5).render(&world, &mut rng).unwrap();
+        let four = axis_camera(8, 4, 5, 1.0).render(&world, &mut rng).unwrap();
 
         // One pixel's worth of samples, taken from the same stream `render`
         // walked: sample k of pixel (i, j) starts 2 * k draws after the pixel's
         // own first draw. Every pixel must come out as the mean of its
         // `samples_per_pixel` shaded samples -- summing instead of dividing
         // would be four times as bright and fail every row below.
-        let camera = Camera::new(8, 8, 4, 5);
+        let camera = axis_camera(8, 4, 5, 1.0);
         for j in 0..camera.image_height {
             for i in 0..camera.image_width {
                 let mut color = Vec3::ZERO;
@@ -331,9 +601,9 @@ mod tests {
                         &mut Rng::seed_from_u64(SEED),
                     );
                 }
-                let row = camera.image_height - 1 - j;
+                // Row `j`, not row `image_height - 1 - j`: Â§12 counts down.
                 assert_vec_close(
-                    Vec3::from_rgb(four.pixels[row * four.width + i]),
+                    Vec3::from_rgb(four.pixels[j * four.width + i]),
                     color / camera.samples_per_pixel as f64,
                 );
             }
@@ -348,7 +618,7 @@ mod tests {
 
     #[test]
     fn antialiasing_still_separates_against_the_real_scene() {
-        // The averaging test above cannot use the §6 scene -- §9 spends extra
+        // The averaging test above cannot use the Â§6 scene -- Â§9 spends extra
         // draws per scatter and the stream stops being indexable -- so this
         // keeps the same comparison alive where the pixels actually come from
         // materials: the two renders must not coincide.
@@ -356,9 +626,9 @@ mod tests {
         let world = test_world(&objects);
 
         let mut rng = Rng::seed_from_u64(SEED);
-        let once = Camera::new(8, 8, 1, 5).render(&world, &mut rng).unwrap();
+        let once = axis_camera(8, 1, 5, 1.0).render(&world, &mut rng).unwrap();
         let mut rng = Rng::seed_from_u64(SEED);
-        let four = Camera::new(8, 8, 4, 5).render(&world, &mut rng).unwrap();
+        let four = axis_camera(8, 4, 5, 1.0).render(&world, &mut rng).unwrap();
 
         assert_ne!(once.pixels, four.pixels);
     }
@@ -367,9 +637,10 @@ mod tests {
     fn max_depth_zero_yields_black() {
         let objects = scene::build(Scene::Spheres);
         let world = test_world(&objects);
-        let camera = Camera::new(8, 5, 1, 0);
-        let mut rng = Rng::seed_from_u64(SEED);
-        let image = camera.render(&world, &mut rng).unwrap();
+        let camera = axis_camera(8, 1, 0, 8.0 / 5.0);
+        let image = camera
+            .render(&world, &mut Rng::seed_from_u64(SEED))
+            .unwrap();
         // A zero-depth camera absorbs every ray, so the image is entirely black.
         assert!(image.pixels.iter().all(|p| p == &[0.0, 0.0, 0.0]));
     }
@@ -402,65 +673,69 @@ mod tests {
 
     #[test]
     fn sky_is_above_and_ground_below() {
-        // An 8x8 camera has `viewport_width = viewport_height = 2`, so the
-        // viewport spans x, y in [-1, 1) and the direction is
-        // (-1 + 2 * (i + du) / 8, -1 + 2 * (j + dv) / 8, -1). Column 0 puts
-        // x in [-1, -3/4) and the mirrored rows put j = 7 at image row 0 and
-        // j = 0 at image row 7.
+        // An 8x8 axis camera: with t = tan(45 deg) and the viewport 2t tall and
+        // 2t wide,
+        //     pixel00_loc = (-7t/8, 7t/8, -1), pixel_delta_u = (t/4, 0, 0),
+        //     pixel_delta_v = (0, -t/4, 0)
+        // so the direction is t(-7/8 + (i + du)/4, 7/8 - (j + dv)/4, -1).
+        // Column 0 puts x in [-7/8, -3/4) and rows 0 and 7 are the ends:
+        //   row 0  y in (5/8, 7/8]   -- looking up
+        //   row 7  y in [-9/8, -7/8) -- looking down
+        // `t` is one ulp under 1, so the bounds below are rounded outwards.
         let objects = scene::build(Scene::Spheres);
         let world = test_world(&objects);
-        let camera = Camera::new(8, 8, 1, 5);
-        let mut rng = Rng::seed_from_u64(SEED);
-        let image = camera.render(&world, &mut rng).unwrap();
+        let camera = axis_camera(8, 1, 5, 1.0);
+        let image = camera
+            .render(&world, &mut Rng::seed_from_u64(SEED))
+            .unwrap();
         let width = image.width;
 
-        // Row 0 looks up: v = (7 + dv) / 8 puts y in [3/4, 1). All four spheres
-        // miss over that whole rectangle, whatever the draw.
+        // Row 0 looks up: y is in (5/8, 7/8]. All four spheres miss over that
+        // whole rectangle, whatever the draw.
         //
-        //   ground  half_b = 100.5 y - 1 >= 74.375 and c = 101.25 > 0, so
-        //           sqrtd < half_b and both roots in `Sphere::hit` are negative.
-        //   glass   the discriminant is -0.75 x^2 - 2 x - 1.75 y^2 - 0.75, and
-        //           over x in [-1, -3/4), y in [3/4, 1) its maximum is at
-        //           (x, y) = (-1, 3/4): 4 - 4.484375 = -0.484375.
-        //   blue    a = x^2 + y^2 + 1 >= 2.125 gives 1 - 0.75 a <= -0.59375.
-        //   metal   half_b = -x - 1 is at most 1/4, so half_b^2 <= 0.0625
-        //           against 1.75 a >= 3.71875.
+        //   ground  half_b = 100.5 y - 1 >= 100.5 * 5/8 - 1 = 61.8125 and
+        //           c = 101.25 > 0, so sqrtd < half_b and both roots in
+        //           `Sphere::hit` are negative.
+        //   glass   disc = -0.75 x^2 - 2 x - 1.75 y^2 - 0.75, maximised at
+        //           (x, y) = (-7/8, 5/8): -0.2578125 < 0.
+        //   blue    disc = 1 - 0.75 (x^2 + y^2 + 1) <= 1 - 0.75 * 1.78125
+        //           = -0.3359375 < 0.
+        //   metal   half_b = -x - 1 <= -1/4, so half_b^2 <= 0.0625 against
+        //           1.75 (x^2 + y^2 + 1) >= 3.11640625.
         //
         // The sky pins blue at exactly 1.0, because `sky_color` returns
-        // (1 - a) + a. Its unit y is y / |d| with y in [3/4, 1) and x^2 in
-        // (9/16, 1], so it runs from 0.75 / sqrt(2.5625) = 0.46852129 to
-        // 1 / sqrt(2.5625) = 0.62469505 and a = 0.5 (unit.y + 1) over
-        // [0.73426064, 0.81234752]. Red gives up 0.5a and green 0.3a, so red is
-        // in [0.59382624, 0.63286968] and green in [0.75629574, 0.77972181].
-        // The observed pair for seed 1 is (0.60703562, 0.76422137).
+        // (1 - a) + a. Over that rectangle the unit y runs from
+        // (5/8) / sqrt(0.765625 + 0.390625 + 1) = 0.42562827 to
+        // (7/8) / sqrt(0.390625 + 0.765625 + 1) = 0.59587957, so
+        // a runs [0.71281413, 0.79793979], red gives up 0.5a and green 0.3a,
+        // and red lands in [0.60103011, 0.64359293] and green in
+        // [0.76061806, 0.78615576].
         let top = image.pixels[0];
         assert_eq!(top[2], 1.0, "sky blue is exactly 1, got {top:?}");
         assert!(
-            top[0] > 0.5935 && top[0] < 0.6332,
-            "sky red {top:?}, expected in (0.5935, 0.6332)"
+            top[0] > 0.6009 && top[0] < 0.6437,
+            "sky red {top:?}, expected in (0.6009, 0.6437)"
         );
         assert!(
-            top[1] > 0.7560 && top[1] < 0.7800,
-            "sky green {top:?}, expected in (0.7560, 0.7800)"
+            top[1] > 0.7605 && top[1] < 0.7863,
+            "sky green {top:?}, expected in (0.7605, 0.7863)"
         );
 
-        // Row 7 looks down: v = dv / 8 puts y in [-1, -3/4), and the same four
-        // checks leave the ground as the only thing there to hit. The glass's
-        // discriminant over x in [-1, -3/4), y in [-1, -3/4) still tops out at
-        // -0.484375, the blue and metal balls are out on x as above, and the
-        // ground's `t` rationalises to 101.25 / (|half_b| + sqrtd), which stays
-        // inside [0.495, 0.672] -- comfortably past `t_min` and the only hit.
+        // Row 7 looks down: y is in [-9/8, -7/8), and the same four checks
+        // leave the ground as the only thing there to hit. The glass's disc tops
+        // out at -0.9140625, the blue ball's at -0.6171875, and the metal ball
+        // is out on x as above.
         //
-        // So this pixel's first material is the ground, whose albedo §11 made
+        // So this pixel's first material is the ground, whose albedo Â§11 made
         // (0.8, 0.8, 0.0). That fixes two things exactly rather than by bound:
         //
         //   blue is exactly 0, because the attenuation multiplies through every
-        //     remaining bounce and 0 times anything is 0. §9's neutral 0.5
+        //     remaining bounce and 0 times anything is 0. Â§9's neutral 0.5
         //     could not say that, which is why the sky-versus-ground split used
         //     to rest on a cap instead.
         //   red and green are at most 0.8, since 0.8 is the ground's own albedo
         //     and every albedo in the scene and every sky channel is <= 1. The
-        //     tightest downstream albedo is §11's own glass at 1.0, so the 0.8
+        //     tightest downstream albedo is Â§11's own glass at 1.0, so the 0.8
         //     here is the cap and not a bound on the chain.
         let bottom = image.pixels[7 * width];
         assert_eq!(
@@ -474,12 +749,123 @@ mod tests {
             );
         }
 
-        // Drop `let row = image_height - 1 - j;` and these two rows swap: the
-        // sky above is pinned to blue 1.0 and the ground below to blue 0.0, so
-        // this is what turns round.
+        // Reinstate `let row = self.image_height - 1 - j;` in `render` and these
+        // two rows swap: the sky above is pinned to blue 1.0 and the ground
+        // below to blue 0.0, so this is what turns round.
         assert!(
             top[2] > bottom[2],
             "sky should sit above ground, got top {top:?} and bottom {bottom:?}"
+        );
+    }
+
+    #[test]
+    fn a_column_reads_sky_then_ball_then_ground() {
+        // An 8-wide camera on 8:16, so 16 rows. viewport_width = 2 * 8/16 = 1
+        // and viewport_height = 2, giving
+        //     pixel_delta_u = (1/8, 0, 0)  and  pixel_delta_v = (0, -1/8, 0)
+        //     viewport_upper_left = (-1/2, 1, -1)
+        //     pixel00_loc = (-1/2 + 1/16, 1 - 1/16, -1) = (-7/16, 15/16, -1)
+        // and the direction is (-7/16 + (i + du)/8, 15/16 - (j + dv)/8, -1).
+        //
+        // Column 0 puts x in [-7/16, -5/16), which is inside the middle ball's
+        // x range [-1/2, 1/2] and outside both side balls: the glass is at
+        // x = -1 with r = 0.5 and needs x <= -0.4514 to be hit at all, and its
+        // disc at (x, y) = (-7/16, 0) is -0.01855469 < 0. So column 0 sees
+        // only sky, the middle ball and the ground, and the three occupy
+        // cleanly separated bands of rows:
+        //
+        //   rows 0-2    y in (9/16, 15/16]   -- above the ball
+        //   rows 5-9    |y| <= 5/16           -- inside it (the ball reaches
+        //                                            |y| <= 0.37673211 at
+        //                                            x = -7/16 and at most
+        //                                            0.48546584 at x = -5/16)
+        //   rows 12-15  |y| >= 9/16           -- below it
+        //
+        // and rows 3, 4, 10 and 11 straddle a silhouette, so the jitter picks
+        // what they hit and all that survives is a range.
+        let objects = scene::build(Scene::Spheres);
+        let world = test_world(&objects);
+        let camera = axis_camera(8, 1, 5, 8.0 / 16.0);
+        let image = camera
+            .render(&world, &mut Rng::seed_from_u64(SEED))
+            .unwrap();
+        let width = image.width;
+        assert_eq!((image.width, image.height), (8, 16));
+
+        // Rows 0-2 are sky whatever the draw. Over x in [-7/16, -5/16) and
+        // y in (9/16, 15/16] the unit y runs from
+        // (9/16) / sqrt(0.19140625 + 0.31640625 + 1) = 0.45808794 to
+        // (15/16) / sqrt(0.09765625 + 0.87890625 + 1) = 0.66683134, so a runs
+        // [0.72904397, 0.83341567], red in [0.58329217, 0.63547802] and green
+        // in [0.74997530, 0.78128681].
+        for row in 0..=2 {
+            let got = image.pixels[row * width];
+            assert_eq!(got[2], 1.0, "row {row} should be sky, got {got:?}");
+            assert!(
+                got[0] > 0.5832 && got[0] < 0.6356,
+                "row {row} red {got:?}, expected in (0.5832, 0.6356)"
+            );
+            assert!(
+                got[1] > 0.7499 && got[1] < 0.7814,
+                "row {row} green {got:?}, expected in (0.7499, 0.7814)"
+            );
+        }
+
+        // Rows 5-9 provably start on the middle ball, whose albedo is
+        // (0.1, 0.2, 0.5). Every later surface -- the glass at 1.0, the ground
+        // at 0.8, the metal at 0.8 and the sky at no more than 1 -- only
+        // multiplies, so the ball's own albedo caps the channel. This is the
+        // only surface in the frame with a red albedo below 0.8, which is what
+        // makes the cap tight rather than merely true.
+        for row in 5..=9 {
+            let got = image.pixels[row * width];
+            assert!(
+                got[0] <= 0.1 && got[1] <= 0.2 && got[2] <= 0.5,
+                "row {row} should be the middle ball under its own albedo, got {got:?}"
+            );
+            assert!(
+                got.iter().all(|c| c.is_finite() && *c >= 0.0),
+                "row {row} should stay finite and non-negative, got {got:?}"
+            );
+        }
+
+        // Rows 12-15 provably start on the ground, whose albedo Â§11 made
+        // (0.8, 0.8, 0.0). Blue is 0.0 exactly, for the same reason the sky's
+        // is 1.0: the attenuation multiplies through and 0 * anything is 0.
+        // Red and green are capped by the ground's own 0.8.
+        for row in 12..=15 {
+            let got = image.pixels[row * width];
+            assert_eq!(
+                got[2], 0.0,
+                "row {row} should start on the ground, got {got:?}"
+            );
+            for (channel, value) in got.iter().enumerate() {
+                assert!(
+                    *value >= 0.0 && *value <= 0.8,
+                    "row {row} channel {channel} should be in [0, 0.8], got {value} in {got:?}"
+                );
+            }
+        }
+
+        // Rows 3, 4, 10 and 11 straddle a silhouette, so nothing is pinned.
+        for row in [3, 4, 10, 11] {
+            let got = image.pixels[row * width];
+            assert!(
+                got.iter().all(|c| c.is_finite() && *c >= 0.0 && *c <= 1.0),
+                "row {row} should stay inside [0, 1], got {got:?}"
+            );
+        }
+
+        // The order of the three bands is what turns round if the mirror comes
+        // back, or if `viewport_upper_left` takes `+ viewport_v / 2`: sky above,
+        // ground below, and the two pinned blues far apart.
+        let sky = image.pixels[0][2];
+        let earth = image.pixels[15 * width][2];
+        assert_eq!(sky, 1.0);
+        assert_eq!(earth, 0.0);
+        assert!(
+            sky > earth,
+            "sky should sit above ground, got {sky} and {earth}"
         );
     }
 
@@ -494,137 +880,5 @@ mod tests {
         // map sends it to white, and the zero normal to the midpoint grey.
         assert_vec_close(shade(Vec3::UNIT), Vec3::UNIT);
         assert_vec_close(shade(Vec3::ZERO), Vec3::new(0.5, 0.5, 0.5));
-    }
-
-    #[test]
-    fn the_horizon_falls_on_the_vertical_centre_row() {
-        // A 9x9 camera has `viewport_width = viewport_height = 2`, so the
-        // viewport spans x, y in [-1, 1) and the direction for pixel (i, j) is
-        // (-1 + 2 (i + du) / 9, -1 + 2 (j + dv) / 9, -1). Image row `r` comes
-        // from viewport row j = 8 - r, so j = 4 -- the viewport centre -- is
-        // image row 4: the two run the same way round here only because the
-        // height is odd and the mirror is an involution on the middle row.
-        let objects = scene::build(Scene::Spheres);
-        let world = test_world(&objects);
-        let camera = Camera::new(9, 9, 1, 5);
-        let mut rng = Rng::seed_from_u64(SEED);
-        let image = camera.render(&world, &mut rng).unwrap();
-        let width = image.width;
-
-        // Pixel (4, 4) is the centre one, and §11's glass ball sits at
-        // column -1 so it is nowhere near it. u = (4 + du) / 9 and
-        // v = (4 + dv) / 9 put the sample in [-1/9, 1/9) on both axes, and over
-        // that box the middle ball is the only thing in range:
-        //   middle  a = x^2 + y^2 + 1 <= 1 + 2/81 and half_b = -1, so
-        //           1 - 0.75 a >= 0.23148 > 0, with t in (0.4879, 0.5189].
-        //   glass   the left ball's discriminant tops out at -0.34256 at
-        //           (-1/9, -1/9) and the right ball's at
-        //           (11/9)^2 - 1.75 = -0.51543 at x = -1/9; both negative.
-        //   ground  can be hit, but at t >= 5.3 -- the ground's `t`
-        //           rationalises to 101.25 / (|half_b| + sqrtd), and the widest
-        //           |half_b| in the box is 12.16667 at y = -1/9.
-        // So the first material is the matte blue ball, albedo (0.1, 0.2, 0.5).
-        //
-        // That fixes a cap no other pixel in this column can reach: the ball is
-        // the only surface here with a red albedo below 0.8, and everything
-        // downstream of it -- glass at 1.0, the ground at 0.8, the metal at 0.8
-        // and the sky at no more than 1.0 -- only multiplies. Seed 1's pixel is
-        // (0.05500573, 0.13000688, 0.0), a glass bounce, then the yellow ground
-        // and the sky; the ground is why blue is exactly 0.
-        //
-        // The colour ordering is measured, not derived: the ball's own albedo
-        // has blue five times red, but a chain of four metal bounces reaches
-        // (4/3)^4 = 3.16 on red over green, so no seed-free claim survives.
-        // What is derived is the cap.
-        let ball = image.pixels[4 * width + 4];
-        assert!(
-            ball[0] <= 0.1 && ball[1] <= 0.2 && ball[2] <= 0.5,
-            "the centre pixel should be the matte ball under its own albedo, got {ball:?}"
-        );
-        assert!(
-            ball.iter().all(|c| c.is_finite()) && ball.iter().all(|c| *c >= 0.0),
-            "the centre pixel should stay finite and non-negative, got {ball:?}"
-        );
-
-        // Rows 0 and 1, column 0, are sky whatever the draw. Both rectangles sit
-        // at y >= 5/9, and over x in [-1, -7/9) the glass ball's discriminant
-        // stays below zero above |y| = 0.53452248 (its widest limit, at x = -1,
-        // falling to 0.44839514 at x = -7/9). 5/9 is 0.555556, so the glass
-        // misses; the blue and metal balls are out on x, where x^2 >= 49/81;
-        // and the ground's half_b = 100.5 y - 1 stays positive, so its roots are
-        // both behind the eye.
-        //
-        // Across both rows the unit y runs from 5/9 / sqrt(2.308642) =
-        // 0.36563621 to 1 / sqrt(2.604938) = 0.61958555, giving a over
-        // [0.68281811, 0.80979278], red in [0.59510361, 0.65859095] and green
-        // in [0.75706217, 0.79515457]. Seed 1 gives (0.61003261, 0.76601957)
-        // and (0.63765310, 0.78259186).
-        for row in 0..=1 {
-            let got = image.pixels[row * width];
-            assert_eq!(got[2], 1.0, "row {row} should be sky, got {got:?}");
-            assert!(
-                got[0] > 0.5948 && got[0] < 0.6589,
-                "row {row} red {got:?}, expected in (0.5948, 0.6589)"
-            );
-            assert!(
-                got[1] > 0.7567 && got[1] < 0.7955,
-                "row {row} green {got:?}, expected in (0.7567, 0.7955)"
-            );
-        }
-
-        // Rows 7 and 8, column 0, are ground whatever the draw, by the same
-        // silhouette limit from below: both sit at |y| >= 5/9 = 0.555556, past
-        // the glass ball's 0.53452248, so the only surface left is the ground,
-        // at t inside [0.495, 0.672].
-        //
-        // §11 made that ground (0.8, 0.8, 0.0), and a ground-first pixel is
-        // pinned exactly: blue is 0.0 for the same reason the sky's is 1.0,
-        // because the attenuation multiplies through and 0 * anything is 0.
-        // Red and green are at most 0.8, the ground's own albedo, since every
-        // later albedo and the sky itself is at most 1.
-        for row in 7..=8 {
-            let got = image.pixels[row * width];
-            assert_eq!(
-                got[2], 0.0,
-                "row {row} should start on the ground, got {got:?}"
-            );
-            for (channel, value) in got.iter().enumerate() {
-                assert!(
-                    *value >= 0.0 && *value <= 0.8,
-                    "row {row} channel {channel} should be in [0, 0.8], got {value} in {got:?}"
-                );
-            }
-        }
-
-        // Rows 2 to 6 are the glass ball's silhouette, and unlike the rows on
-        // either side of them nothing here is pinned. Rows 3, 4 and 5 have
-        // |y| <= 1/3 = 0.33333333, inside even the narrowest silhouette limit,
-        // so those three provably start on the glass; rows 2 and 6 run from
-        // |y| = 1/3 out to 5/9 and straddle the 0.44839514 to 0.53452248 edge,
-        // so the jitter decides. And glass neither tints nor absorbs -- its
-        // attenuation is (1, 1, 1) and it has no `None` arm -- so the pixel is
-        // just whatever the rest of the chain returns, which is why seed 1
-        // gives blue 0 on row 3 (the chain reaches the ground) and blue 1 on
-        // rows 4 and 5 (it does not). All that survives is the range.
-        for row in 2..=6 {
-            let got = image.pixels[row * width];
-            assert!(
-                got.iter().all(|c| c.is_finite() && *c >= 0.0 && *c <= 1.0),
-                "row {row} should stay inside [0, 1], got {got:?}"
-            );
-        }
-
-        // The horizon is where the two provable blocks meet: sky pinned to blue
-        // 1.0 on rows 0 and 1, ground pinned to blue 0.0 on rows 7 and 8, and
-        // the silhouette between them. Drop `let row = image_height - 1 - j;`
-        // and the two blocks swap ends, so the ordering below is what catches it.
-        let sky = image.pixels[0][2];
-        let earth = image.pixels[8 * width][2];
-        assert_eq!(sky, 1.0);
-        assert_eq!(earth, 0.0);
-        assert!(
-            sky > earth,
-            "sky should sit above ground, got {sky} and {earth}"
-        );
     }
 }
