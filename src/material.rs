@@ -3,12 +3,13 @@
 use crate::hittable::HitRecord;
 use crate::ray::Ray;
 use crate::rng::Rng;
-use crate::vec3::{Color, reflect};
+use crate::vec3::{Color, reflect, refract};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Material {
     Lambertian { albedo: Color },
     Metal { albedo: Color, fuzz: f64 },
+    Dielectric { ior: f64 },
 }
 
 impl Material {
@@ -20,6 +21,12 @@ impl Material {
     /// `[0, 1]` on every scatter (§10).
     pub fn metal(albedo: Color, fuzz: f64) -> Self {
         Self::Metal { albedo, fuzz }
+    }
+
+    /// Glass and every other transparent medium. `ior` is the index of
+    /// refraction relative to the surrounding medium (§11).
+    pub fn dielectric(ior: f64) -> Self {
+        Self::Dielectric { ior }
     }
 
     /// Choose a scattered ray and its attenuation (§9, §10). `None` absorbs the
@@ -58,8 +65,52 @@ impl Material {
                     Some((scattered, *albedo))
                 }
             }
+            // §11: total internal reflection first, then Schlick's
+            // approximation to decide the reflect/refract split. `refract` is
+            // module-level in `vec3` for the same reason `reflect` is.
+            //
+            // The book keeps `ri` as the name for the *ratio*, and that name
+            // matters: entering the sphere means dividing by `ior`, leaving it
+            // means multiplying, and only the leaving case can go past the
+            // critical angle.
+            Material::Dielectric { ior } => {
+                let refraction_ratio = if rec.front_face { 1.0 / ior } else { *ior };
+
+                let unit_direction = ray.direction.unit();
+                let cos_theta = (-unit_direction).dot(rec.normal).min(1.0);
+                let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+
+                // Past the critical angle the refracted ray would have to be
+                // longer than it is allowed to be, so there is none to take.
+                let cannot_refract = refraction_ratio * sin_theta > 1.0;
+
+                let direction =
+                    if cannot_refract || reflectance(cos_theta, refraction_ratio) > rng.f64() {
+                        reflect(unit_direction, rec.normal)
+                    } else {
+                        refract(unit_direction, rec.normal, refraction_ratio)
+                    };
+
+                // Glass does not tint: every bounce leaves the ray at full
+                // strength, so the attenuation is white.
+                Some((Ray::new(rec.point, direction), Color::UNIT))
+            }
         }
     }
+}
+
+/// Schlick's approximation of the Fresnel reflectance (§11).
+///
+/// `refraction_ratio` is Snell's `eta_ratio`, not a material's `ior`: the ratio
+/// of the two indices at the boundary, so `1 / ior` entering a sphere and
+/// `ior` leaving one. The book's parameter is called `refraction_index`, which
+/// reads like the material's index but is not -- at normal incidence this
+/// returns `((1 - eta) / (1 + eta))^2`, and squaring makes that 0.04 for
+/// air/glass whether the ratio is `1/1.5` or `1.5`.
+fn reflectance(cosine: f64, refraction_ratio: f64) -> f64 {
+    let mut r0 = (1.0 - refraction_ratio) / (1.0 + refraction_ratio);
+    r0 *= r0;
+    r0 + (1.0 - r0) * (1.0 - cosine).powi(5)
 }
 
 #[cfg(test)]
@@ -79,6 +130,16 @@ mod tests {
 
     fn straight_down(normal: Vec3) -> Ray {
         Ray::new(Vec3::ZERO, -normal)
+    }
+
+    /// A dielectric hit record with the face under the ray chosen by hand.
+    ///
+    /// `record` always reports `front_face: true`, which is the air-to-glass
+    /// direction. Leaving a sphere is the other case and reports `false`.
+    fn dielectric_record(normal: Vec3, front_face: bool) -> HitRecord {
+        let mut rec = record(Vec3::ZERO, normal, Material::dielectric(1.5));
+        rec.front_face = front_face;
+        rec
     }
 
     #[test]
@@ -344,5 +405,263 @@ mod tests {
             .scatter(&ray, &rec, &mut Rng::seed_from_u64(1))
             .unwrap();
         assert_eq!(attenuation, albedo);
+    }
+
+    /// Schlick at normal incidence is `((1 - eta) / (1 + eta))^2` and nothing
+    /// else, because `(1 - 1)^5 = 0` kills the grazing term outright.
+    ///
+    /// With `eta = 1/1.5 = 0.66666666666666663` in binary64:
+    ///   1 - eta   = 0.33333333333333337   (exact: the exponent doubles)
+    ///   1 + eta   = 1.6666666666666665    (one rounding)
+    ///   r0        = 0.20000000000000004
+    ///   r0 * r0   = 0.04000000000000001
+    /// against a true `0.04`, so the error is `1.4e-17` and the `1e-12`
+    /// tolerance below is slack rather than load-bearing. Observed:
+    /// `0.04000000000000001`.
+    ///
+    /// This is also the assertion that dies if `r0 *= r0` is dropped: unsquared,
+    /// the same expression returns `0.20000000000000004`, which is `0.16` away
+    /// from `0.04`.
+    #[test]
+    fn reflectance_at_normal_incidence_matches_r0() {
+        let r = reflectance(1.0, 1.0 / 1.5);
+        assert!(
+            (r - 0.04).abs() < 1e-12,
+            "normal-incidence reflectance should be 0.04, got {r}"
+        );
+    }
+
+    /// Three angles, one rising curve: normal, 45 degrees, grazing.
+    ///
+    /// The grazing value is exactly 1.0 and not merely near it. At
+    /// `cosine = 0` the term collapses to `r0 + (1 - r0) * 1`, and with
+    /// `r0 = 0.04000000000000001` the subtraction `1 - r0` rounds once -- by at
+    /// most half an ulp, since `r0` sits at exponent -5 and the result near 1.0
+    /// has an ulp of `2^-53`. Adding `r0` back lands within `2^-54` of 1.0,
+    /// whose nearest representable neighbours are `2^-53` away, so the sum
+    /// rounds onto 1.0 itself. Observed: `1.0`.
+    #[test]
+    fn reflectance_rises_toward_grazing_angles() {
+        let eta = 1.0 / 1.5;
+        let r_normal = reflectance(1.0, eta);
+        let r_45 = reflectance(0.5f64.sqrt(), eta);
+        let r_grazing = reflectance(0.0, eta);
+
+        // 0.04000000000000001 < 0.04206927312437237 < 1.0
+        assert!(
+            r_normal < r_45,
+            "45 degrees should beat normal: {r_normal} vs {r_45}"
+        );
+        assert!(
+            r_45 < r_grazing,
+            "grazing should beat 45 degrees: {r_45} vs {r_grazing}"
+        );
+        assert_eq!(r_grazing, 1.0);
+    }
+
+    #[test]
+    fn glass_does_not_dim_the_ray() {
+        let normal = Vec3::new(0.0, 1.0, 0.0);
+        let material = Material::dielectric(1.5);
+        let rec = dielectric_record(normal, true);
+        let ray = Ray::new(Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, -1.0, 0.0).unit());
+        let (_, attenuation) = material
+            .scatter(&ray, &rec, &mut Rng::seed_from_u64(1))
+            .unwrap();
+        assert_eq!(attenuation, Vec3::UNIT);
+    }
+
+    /// At normal incidence `refract` hands the ray straight back: with
+    /// `uv + cos_theta * n` cancelling to exactly zero, the perpendicular term
+    /// vanishes and only `-sqrt(1 - 0) * n = -n` is left, which is `uv` again.
+    /// The draw decides the rest, and `reflectance(1.0, 1/1.5) = 0.04`, so a
+    /// fraction `0.04` of samples mirror off instead.
+    ///
+    /// Over 1000 draws of seed 1 that leaves `1000 * 0.04 = 40` mirrors with a
+    /// binomial sd of `sqrt(1000 * 0.04 * 0.96) = 6.20`; the observed count of
+    /// non-straight samples is 36. The band below is `mean - 12 sd`, so it holds
+    /// for the seeds it was checked against rather than for one lucky draw.
+    #[test]
+    fn glass_refracts_a_head_on_ray_without_deflecting_it() {
+        let normal = Vec3::new(0.0, 1.0, 0.0);
+        let material = Material::dielectric(1.5);
+        let rec = dielectric_record(normal, true);
+        let ray = Ray::new(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0));
+        let mirror = reflect(ray.direction, normal);
+
+        let mut rng = Rng::seed_from_u64(1);
+        let mut mirrored = 0usize;
+        for _ in 0..1_000 {
+            let (scattered, _) = material.scatter(&ray, &rec, &mut rng).unwrap();
+            if (scattered.direction - mirror).length() < 1e-12 {
+                mirrored += 1;
+            } else {
+                assert!(
+                    (scattered.direction - ray.direction).length() < 1e-12,
+                    "a head-on ray must either go straight or mirror, got {:?}",
+                    scattered.direction
+                );
+            }
+        }
+        assert!(
+            (1_000 - mirrored) > 900,
+            "at least 900 of 1000 should pass straight through, {mirrored} mirrored"
+        );
+    }
+
+    /// `front_face` has to pick `1 / ior`, not `ior`.
+    ///
+    /// Normal incidence cannot tell the two apart -- both ratios refract the ray
+    /// along itself -- so only an oblique ray separates them. Entering the
+    /// glass, Snell says `sin(theta_t) = sin(theta_i) / 1.5`, and a 45-degree
+    /// entry gives `asin(0.7071067811865476 / 1.5) = 28.1255057` degrees. The
+    /// leaving ratio of 1.5 would instead ask for `asin(1.5 * 0.70711) =
+    /// asin(1.06066)`, which has no solution at all.
+    ///
+    /// Every sample is checked against that angle rather than against a
+    /// hard-coded direction, so the test would notice a wrong ratio as an
+    /// angle it cannot produce. `reflectance(0.7071, 1/1.5) = 0.04206927`, so
+    /// about 42 of every 1000 mirror off; seed 11 gives 50.
+    #[test]
+    fn glass_bends_an_oblique_ray_toward_the_normal_when_entering() {
+        let normal = Vec3::new(0.0, 1.0, 0.0);
+        let material = Material::dielectric(1.5);
+        let rec = dielectric_record(normal, true);
+        let ray = Ray::new(Vec3::ZERO, Vec3::new(1.0, -1.0, 0.0).unit());
+        let mirror = reflect(ray.direction, normal);
+        let expected_degrees = (45.0_f64.to_radians().sin() / 1.5).asin().to_degrees();
+
+        let mut rng = Rng::seed_from_u64(11);
+        let mut refracted = 0usize;
+        for _ in 0..1_000 {
+            let (scattered, _) = material.scatter(&ray, &rec, &mut rng).unwrap();
+            if (scattered.direction - mirror).length() < 1e-12 {
+                continue;
+            }
+            // theta_t is measured off the inward normal, and the refracted ray
+            // runs into the surface, so that is the angle between it and -n.
+            let degrees = (-scattered.direction.dot(normal)).acos().to_degrees();
+            assert!(
+                (degrees - expected_degrees).abs() < 1e-9,
+                "expected {expected_degrees} degrees, got {degrees} from {:?}",
+                scattered.direction
+            );
+            refracted += 1;
+        }
+        assert!(
+            refracted > 900,
+            "most of 1000 samples should refract, only {refracted} did"
+        );
+    }
+
+    /// Total internal reflection, and the exact edge of it.
+    ///
+    /// Leaving glass the ratio is `ior = 1.5`, so no refracted ray exists once
+    /// `1.5 * sin_theta > 1`, that is once `sin_theta > 2/3`, which is an
+    /// incidence of `asin(2/3) = 41.81031490` degrees.
+    ///
+    /// The grazing ray below is nowhere near that edge. `unit(1, -0.01, 0)` is
+    /// `(0.9999500037496877, -0.009999500037496877, 0)`, so
+    /// `cos_theta = 0.00999950003749688`,
+    /// `sin_theta = sqrt(1 - cos_theta^2) = 0.99995000374968757`, and
+    /// `1.5 * sin_theta = 1.49992500562453124 > 1`. Against the `2/3` threshold
+    /// that is 0.3333 past the boundary, and 89.42706130 degrees of incidence
+    /// against 41.81031490 -- nowhere near a case the `>` could be reading
+    /// either way.
+    #[test]
+    fn total_internal_reflection_begins_past_the_critical_angle() {
+        let normal = Vec3::new(0.0, 1.0, 0.0);
+        let material = Material::dielectric(1.5);
+        // `front_face` is false because the ray is exiting the glass, which is
+        // the only direction from which `ri = ior > 1`.
+        let rec = dielectric_record(normal, false);
+        let ray = Ray::new(Vec3::ZERO, Vec3::new(1.0, -0.01, 0.0).unit());
+
+        let sin_theta = {
+            let cos_theta = (-ray.direction).dot(normal).min(1.0);
+            assert!(
+                1.5 * (1.0 - cos_theta * cos_theta).sqrt() > 1.0,
+                "this ray is not past the critical angle; pick another one"
+            );
+            (1.0 - cos_theta * cos_theta).sqrt()
+        };
+        assert!(
+            sin_theta > 2.0 / 3.0,
+            "sin_theta {sin_theta} is not past 2/3"
+        );
+
+        let expected = reflect(ray.direction.unit(), normal);
+        let mut rng = Rng::seed_from_u64(2);
+        for _ in 0..1_000 {
+            let (scattered, _) = material.scatter(&ray, &rec, &mut rng).unwrap();
+            assert!((scattered.direction - expected).length() < 1e-9);
+        }
+
+        // And the other side of the same boundary. The book compares strictly,
+        // so a ray sitting exactly on the critical angle -- where a refracted
+        // ray exists but leaves along the surface -- still refracts.
+        //
+        // `(1, -sqrt(1.25), 0)` is `(sin(theta), -cos(theta), 0)` scaled by 3/2
+        // with `theta = asin(2/3)`, so it is aimed at exactly the critical
+        // angle. In binary64 `cos_theta` comes out `0.74535599249992990` and
+        // `sin_theta` `0.66666666666666663`, and `1.5 * sin_theta` is exactly
+        // `1.0`. That is a floating-point fact about this direction and no
+        // other, so it is asserted rather than assumed: the literal above is
+        // only meaningful while the check holds.
+        let on_the_edge = Ray::new(Vec3::ZERO, Vec3::new(1.0, -1.25_f64.sqrt(), 0.0).unit());
+        let cos_theta = (-on_the_edge.direction).dot(normal).min(1.0);
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+        assert_eq!(
+            1.5 * sin_theta,
+            1.0,
+            "this direction is no longer exactly on the critical angle"
+        );
+        assert!(!(1.5 * sin_theta > 1.0), "the book's `>` must be strict");
+
+        // At that angle `refract` returns exactly `(1, 0, 0)`: the
+        // perpendicular term is `1.5 * (uv + cos_theta * n)` and the two y
+        // components cancel bit for bit, leaving `|r_out_perp| = 1` exactly, so
+        // the parallel term is `sqrt(1 - 1) = 0` and what is left is `(1, 0, 0)`
+        // -- tangent to the surface, as the critical angle requires. The mirror
+        // is `sqrt(2/3) = 0.816496580927726` away from it, so the two outcomes
+        // are never confused.
+        let mirror = reflect(on_the_edge.direction, normal);
+        let tangent = refract(on_the_edge.direction, normal, 1.5);
+        assert_eq!(tangent, Vec3::new(1.0, 0.0, 0.0));
+        assert!((mirror - tangent).length() > 0.8);
+
+        // `reflectance` is still only ~0.0410 here, so a few hundred draws take
+        // the mirror even though a refracted ray is available: 1000 * 0.04103
+        // leaves ~41 with a sd of 6.23, and seed 2 gives 38. The point is the
+        // other 962 -- read `>=` and none of them would be there.
+        let mut rng = Rng::seed_from_u64(2);
+        let mut tangential = 0usize;
+        for _ in 0..1_000 {
+            let (scattered, _) = material.scatter(&on_the_edge, &rec, &mut rng).unwrap();
+            if (scattered.direction - tangent).length() < 1e-12 {
+                tangential += 1;
+            }
+        }
+        assert!(
+            tangential > 900,
+            "a ray on the critical angle should still refract, only {tangential} of 1000 did"
+        );
+    }
+
+    #[test]
+    fn dielectric_scatter_is_reproducible() {
+        let normal = Vec3::new(0.0, 1.0, 0.0);
+        let material = Material::dielectric(1.5);
+        let rec = dielectric_record(normal, true);
+        let ray = Ray::new(Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, -1.0, 0.0).unit());
+        let a = material
+            .scatter(&ray, &rec, &mut Rng::seed_from_u64(5))
+            .unwrap()
+            .0;
+        let b = material
+            .scatter(&ray, &rec, &mut Rng::seed_from_u64(5))
+            .unwrap()
+            .0;
+        assert_eq!(a, b);
     }
 }
