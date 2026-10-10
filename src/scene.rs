@@ -11,6 +11,21 @@ pub enum Scene {
     Spheres,
 }
 
+/// Names accepted by `--scene`. The CLI checks a `--scene` argument against
+/// this list, so adding a variant means adding a name here with it.
+pub const SCENE_NAMES: &[&str] = &["spheres"];
+
+impl Scene {
+    /// Look a scene up by its `--scene` name, or `None` if there is no such
+    /// scene.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "spheres" => Some(Self::Spheres),
+            _ => None,
+        }
+    }
+}
+
 /// Build the objects for a scene. Returns owned boxes so the caller can keep
 /// them alive while `HittableList` borrows them.
 pub fn build(scene: Scene) -> Vec<Box<dyn Hittable>> {
@@ -60,6 +75,22 @@ mod tests {
     #[test]
     fn spheres_scene_contains_four_objects() {
         assert_eq!(build(Scene::Spheres).len(), 4);
+    }
+
+    #[test]
+    fn every_advertised_scene_name_resolves() {
+        // `--scene` validates against `SCENE_NAMES` and the renderer resolves
+        // through `from_name`. If those two ever drift, a name the CLI accepts
+        // would fail at render time, so they are checked against each other
+        // rather than written down twice.
+        for name in SCENE_NAMES {
+            assert!(
+                Scene::from_name(name).is_some(),
+                "`{name}` is advertised but resolves to nothing"
+            );
+        }
+        assert_eq!(Scene::from_name("nope"), None);
+        assert_eq!(SCENE_NAMES.len(), 1);
     }
 
     #[test]

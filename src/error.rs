@@ -7,6 +7,8 @@ pub enum RenderError {
     MissingValue { flag: String },
     InvalidParameter { flag: String, value: String },
     UnknownFlag { flag: String },
+    UnknownScene { name: String },
+    UnsupportedFormat { extension: String },
     Io(std::io::Error),
 }
 
@@ -25,6 +27,15 @@ impl fmt::Display for RenderError {
                 )
             }
             Self::UnknownFlag { flag } => write!(f, "unknown option: {flag}"),
+            Self::UnknownScene { name } => write!(
+                f,
+                "unknown scene: {name} (valid: {})",
+                crate::scene::SCENE_NAMES.join(", ")
+            ),
+            Self::UnsupportedFormat { extension } => write!(
+                f,
+                "unsupported output format: {extension} (PNG output lands in chapter 14)"
+            ),
             Self::Io(e) => write!(f, "io error: {e}"),
         }
     }
@@ -37,7 +48,9 @@ impl std::error::Error for RenderError {
             Self::InvalidDimension { .. }
             | Self::MissingValue { .. }
             | Self::InvalidParameter { .. }
-            | Self::UnknownFlag { .. } => None,
+            | Self::UnknownFlag { .. }
+            | Self::UnknownScene { .. }
+            | Self::UnsupportedFormat { .. } => None,
         }
     }
 }
