@@ -8,6 +8,7 @@ pub mod cli;
 pub mod error;
 pub mod image;
 pub mod renderer;
+pub mod vec3;
 
 /// Pi, as used throughout the book.
 pub const PI: f64 = 3.1415926535897932385;
