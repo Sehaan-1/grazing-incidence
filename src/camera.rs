@@ -7,7 +7,7 @@ use crate::ray::Ray;
 use crate::rng::Rng;
 use crate::vec3::Vec3;
 
-/// The book's Â§12 listing, split into constants so `chapter_twelve`, the
+/// The book's §12 listing, split into constants so `chapter_twelve`, the
 /// renderer and the CLI all read the framing off one place instead of each
 /// restating it.
 pub const CHAPTER_TWELVE_WIDTH: usize = 400;
@@ -26,17 +26,17 @@ pub const CHAPTER_THIRTEEN_VFOV: f64 = 20.0;
 pub const CHAPTER_THIRTEEN_DEFOCUS_ANGLE: f64 = 10.0;
 pub const CHAPTER_THIRTEEN_FOCUS_DIST: f64 = 3.4;
 
-/// A camera: a pinhole from Â§7, positioned and aimed from Â§12, given a
-/// lens aperture in Â§13.
+/// A camera: a pinhole from §7, positioned and aimed from §12, given a
+/// lens aperture in §13.
 ///
-/// Â§12 is where the image stops being a fixed viewport seen from the origin.
+/// §12 is where the image stops being a fixed viewport seen from the origin.
 /// The eye moves to `lookfrom`, the frame is built out of `lookat` and `vup`
 /// instead of out of the world axes, and the vertical field of view becomes a
 /// number rather than the implicit `viewport_height = 2`.
 ///
-/// The orientation changed with it. Â§4-Â§7 anchored on the *bottom*-left
+/// The orientation changed with it. §4-§7 anchored on the *bottom*-left
 /// viewport corner and counted `j` upward, so `j = 0` was the bottom of the
-/// picture and `render` had to mirror its write index. Â§12 anchors on
+/// picture and `render` had to mirror its write index. §12 anchors on
 /// `pixel00_loc` -- the *top*-left -- and its `pixel_delta_v` already points
 /// down, because `viewport_v = viewport_height * -v` flips the camera's own up
 /// vector. So `j = 0` is the top row and no mirror is needed. `render` writes
@@ -77,7 +77,7 @@ pub struct Camera {
     defocus_disk_u: Vec3,
     defocus_disk_v: Vec3,
 
-    /// The camera frame (Â§12). `w` points from `lookat` back to `lookfrom`, `u`
+    /// The camera frame (§12). `w` points from `lookat` back to `lookfrom`, `u`
     /// runs right across the picture and `v` runs up it; all three are unit
     /// and mutually perpendicular. They are kept on the camera rather than
     /// discarded at construction so the frame can be inspected.
@@ -87,7 +87,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// Â§12's height rule, on its own: `image_width / aspect_ratio`, truncated
+    /// §12's height rule, on its own: `image_width / aspect_ratio`, truncated
     /// toward zero, then floored at 1.
     ///
     /// The floor is what stops a very wide viewport -- or a very small width --
@@ -98,7 +98,7 @@ impl Camera {
         ((image_width as f64 / aspect_ratio) as usize).max(1)
     }
 
-    /// Build the camera frame (Â§12).
+    /// Build the camera frame (§12).
     ///
     /// `lookfrom` is the eye, `lookat` the point it looks at and `vup` the
     /// world direction that counts as "up" in the picture. `vfov` is the
@@ -135,7 +135,7 @@ impl Camera {
     ) -> Self {
         let image_height = Self::derived_height(image_width, aspect_ratio);
 
-        // Â§12: the eye is `focal_length` in front of the target, and the
+        // §12: the eye is `focal_length` in front of the target, and the
         // viewport is the plane of width `2 h focal_length` at the eye,
         // half-angles at the edges of `vfov`.
         let focal_length = (lookfrom - lookat).length();
@@ -196,7 +196,7 @@ impl Camera {
         }
     }
 
-    /// The Â§12 listing: 400px wide, 16:9, a 90-degree lens from (-2, 2, 1)
+    /// The §12 listing: 400px wide, 16:9, a 90-degree lens from (-2, 2, 1)
     /// looking at the origin's -z end. §12 has no aperture, so the last two
     /// arguments pin it shut: a zero `defocus_angle` collapses the defocus disk
     /// to a point and every ray leaves from `lookfrom`.
@@ -241,7 +241,7 @@ impl Camera {
         )
     }
 
-    /// Cast one ray per sample through the viewport and shade it (Â§6, Â§7, Â§8).
+    /// Cast one ray per sample through the viewport and shade it (§6, §7, §8).
     ///
     /// Every sample is a fresh jittered ray from `rng`, so the same generator
     /// state replays the same image and the test suite can assert on exact
@@ -254,7 +254,7 @@ impl Camera {
     /// `rng`. That is what keeps the exact-pixel tests below exact, since they
     /// index the stream at two draws per sample.
     ///
-    /// Row `j` is written to image row `j`, unmirrored. Â§12 anchored the
+    /// Row `j` is written to image row `j`, unmirrored. §12 anchored the
     /// viewport on `pixel00_loc`, the top-left, and gave the camera a downward
     /// `pixel_delta_v`, so `j = 0` is already the top of the picture.
     pub fn render(&self, world: &dyn Hittable, rng: &mut Rng) -> Result<Image, RenderError> {
@@ -288,7 +288,7 @@ impl Camera {
     /// which is at least 1 -- and would leave the first row and column a full
     /// sample short of the near edge. The book makes the same choice.
     ///
-    /// `j` counts *down*. That is the whole of Â§12's orientation change and it
+    /// `j` counts *down*. That is the whole of §12's orientation change and it
     /// is why `render` no longer mirrors its write index.
     ///
     /// §13 splits the ray's two ends apart. `pixel_sample` -- the point on the
@@ -324,7 +324,7 @@ impl Camera {
         self.lookfrom + self.defocus_disk_u * p.x + self.defocus_disk_v * p.y
     }
 
-    /// Shade one ray: a hit bounces off its material, a miss is the sky (Â§9).
+    /// Shade one ray: a hit bounces off its material, a miss is the sky (§9).
     ///
     /// `depth` counts the bounces still available, so a camera with none left
     /// renders black. Every bounce draws from `rng`, the same generator that
@@ -334,7 +334,7 @@ impl Camera {
             return Vec3::ZERO;
         }
 
-        // Â§9: a t_min of 0.001 skips the self-intersection that floating-point
+        // §9: a t_min of 0.001 skips the self-intersection that floating-point
         // rounding introduces. This is the "shadow acne" the book fixes here.
         if let Some(rec) = world.hit(ray, 0.001, f64::INFINITY) {
             if let Some((scattered, attenuation)) = rec.material.scatter(ray, &rec, rng) {
@@ -347,7 +347,7 @@ impl Camera {
     }
 }
 
-/// The sky: white at the horizon, blue overhead (Â§4).
+/// The sky: white at the horizon, blue overhead (§4).
 fn sky_color(direction: Vec3) -> Vec3 {
     let unit_direction = direction.unit();
     let a = 0.5 * (unit_direction.y + 1.0);
@@ -391,7 +391,7 @@ mod tests {
         )
     }
 
-    /// The Â§6 world. `HittableList` borrows the objects, so the caller has to
+    /// The §6 world. `HittableList` borrows the objects, so the caller has to
     /// hold them alive for as long as the list is used.
     fn test_world<'a>(objects: &'a [Box<dyn Hittable>]) -> HittableList<'a> {
         let mut list = HittableList::new();
@@ -420,9 +420,9 @@ mod tests {
     }
 
     /// The book's normal colour map: each normal component maps from [-1, 1] to
-    /// [0, 1] (Â§6.1, unchanged through Â§7).
+    /// [0, 1] (§6.1, unchanged through §7).
     ///
-    /// Â§9 replaced this with `Material::scatter`, so nothing in the renderer
+    /// §9 replaced this with `Material::scatter`, so nothing in the renderer
     /// calls it any more. It stays here, in the tests, because the test below
     /// still pins what the map did.
     fn shade(normal: Vec3) -> Vec3 {
@@ -730,7 +730,7 @@ mod tests {
 
         // a = 0.5 * (unit.y + 1): blue is (1 - a) + a = 1, red gives up 0.5a
         // and green 0.3a. Pixel (0, 0) is the viewport's top-left square, so
-        // Â§12 writes it to image row 0 with no mirror.
+        // §12 writes it to image row 0 with no mirror.
         assert_eq!(
             Vec3::from_rgb(image.pixels[0]),
             sky_color(direction),
@@ -770,7 +770,7 @@ mod tests {
                         &mut Rng::seed_from_u64(SEED),
                     );
                 }
-                // Row `j`, not row `image_height - 1 - j`: Â§12 counts down.
+                // Row `j`, not row `image_height - 1 - j`: §12 counts down.
                 assert_vec_close(
                     Vec3::from_rgb(four.pixels[j * four.width + i]),
                     color / camera.samples_per_pixel as f64,
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn antialiasing_still_separates_against_the_real_scene() {
-        // The averaging test above cannot use the Â§6 scene -- Â§9 spends extra
+        // The averaging test above cannot use the §6 scene -- §9 spends extra
         // draws per scatter and the stream stops being indexable -- so this
         // keeps the same comparison alive where the pixels actually come from
         // materials: the two renders must not coincide.
@@ -895,16 +895,16 @@ mod tests {
         // out at -0.9140625, the blue ball's at -0.6171875, and the metal ball
         // is out on x as above.
         //
-        // So this pixel's first material is the ground, whose albedo Â§11 made
+        // So this pixel's first material is the ground, whose albedo §11 made
         // (0.8, 0.8, 0.0). That fixes two things exactly rather than by bound:
         //
         //   blue is exactly 0, because the attenuation multiplies through every
-        //     remaining bounce and 0 times anything is 0. Â§9's neutral 0.5
+        //     remaining bounce and 0 times anything is 0. §9's neutral 0.5
         //     could not say that, which is why the sky-versus-ground split used
         //     to rest on a cap instead.
         //   red and green are at most 0.8, since 0.8 is the ground's own albedo
         //     and every albedo in the scene and every sky channel is <= 1. The
-        //     tightest downstream albedo is Â§11's own glass at 1.0, so the 0.8
+        //     tightest downstream albedo is §11's own glass at 1.0, so the 0.8
         //     here is the cap and not a bound on the chain.
         let bottom = image.pixels[7 * width];
         assert_eq!(
@@ -998,7 +998,7 @@ mod tests {
             );
         }
 
-        // Rows 12-15 provably start on the ground, whose albedo Â§11 made
+        // Rows 12-15 provably start on the ground, whose albedo §11 made
         // (0.8, 0.8, 0.0). Blue is 0.0 exactly, for the same reason the sky's
         // is 1.0: the attenuation multiplies through and 0 * anything is 0.
         // Red and green are capped by the ground's own 0.8.
