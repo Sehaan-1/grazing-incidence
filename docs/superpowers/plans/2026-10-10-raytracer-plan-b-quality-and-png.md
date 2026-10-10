@@ -1550,20 +1550,27 @@ mod tests {
     use super::*;
     use crate::cli::Options;
 
+    /// A small render. The defaults are 400x225 at 100 samples per pixel and
+    /// `cargo test` builds unoptimized, so two default renders inside a test
+    /// would take many minutes. 40px at 2 samples exercises the same
+    /// determinism guarantee in a fraction of a second.
+    fn small(seed: u64) -> Options {
+        Options { width: 40, samples_per_pixel: 2, seed, ..Options::default() }
+    }
+
     #[test]
     fn same_seed_produces_an_identical_image() {
-        let a = render_scene(&Options::default()).unwrap();
-        let b = render_scene(&Options::default()).unwrap();
+        let a = render_scene(&small(0)).unwrap();
+        let b = render_scene(&small(0)).unwrap();
         assert_eq!(a.pixels, b.pixels);
     }
 
     #[test]
     fn different_seeds_produce_different_images() {
-        let mut x = Options::default();
-        x.seed = 1;
-        let mut y = Options::default();
-        y.seed = 2;
-        assert_ne!(render_scene(&x).unwrap().pixels, render_scene(&y).unwrap().pixels);
+        assert_ne!(
+            render_scene(&small(1)).unwrap().pixels,
+            render_scene(&small(2)).unwrap().pixels
+        );
     }
 }
 ```
