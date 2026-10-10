@@ -132,6 +132,24 @@ The book builds `lambertian`, `metal` and `dielectric` behind a
 exhaustively matched, and keeps `HitRecord` free of lifetime parameters and
 reference-counting churn.
 
+Variants are added as their chapters arrive — `Lambertian` in chapter 9,
+`Metal` in 10, `Dielectric` in 11 — so every commit compiles.
+
+`scatter` returns `Option<(Ray, Vec3)>` from the moment `Material` exists, even
+though chapter 9 does not yet need the attenuation. This is a deliberate
+divergence from the book, whose `lambertian::scatter` returns only a `ray`;
+adopting the two-tuple later would mean a breaking signature change in chapter
+10 for no gain.
+
+### PPM: P3 in the book, P6 here
+
+The book's text writes **P3**, plain-ASCII PPM. At 400×225 that is roughly 270,000
+space-separated numbers, about 1.1 MB of text per image. This project writes
+**P6**, the binary form of the same format: identical image, 270,000 bytes, and
+one `write` call instead of per-channel formatting. The book's own released
+`inOneWeekend` program also emits P6. The header test in the testing strategy
+asserts `P6` for this reason.
+
 ### Colour
 
 `type Color = Vec3;` keeps all colour arithmetic on `Vec3`, matching the book's
@@ -202,6 +220,14 @@ only where it is exactly representable (the `t = 2.0` sphere case above).
 
 ## CLI contract
 
+Argument parsing arrives in two stages, mirroring what the book itself can
+motivate at each point:
+
+- **Chapter 2** parses `--width` and `--height` only, exactly as the book's
+  §2 "Creating an Image File" does. Output path is hardcoded.
+- **Chapter 13** completes the CLI with `--samples`, `--seed`, `--scene`,
+  `--out` and `--help`, once every one of them has a meaning.
+
 The binary is `grazing-incidence`, the name of the Cargo package. (`rtiow` is
 the placeholder name the book uses and is **not** used here.) Argument parsing is
 hand-rolled; there is no `clap`.
@@ -211,8 +237,10 @@ grazing-incidence [--width N] [--height N] [--samples N] [--seed N]
                   [--out PATH] [--scene NAME] [--help]
 ```
 
-- Defaults match the book's final image: 400×280, 500 samples, fixed default
-  seed, `--scene final-book`.
+- Defaults are the book's chapter-13 image: **400×225, 100 samples per pixel,
+  max depth 50**, fixed default seed, `--scene defocus`.
+- `--scene cover` is the book's full final render (Listing 88): **1200×675, 500
+  samples**. This is many hours of CPU time and is never produced by default.
 - Unknown flags are a hard error, never silently ignored.
 - Invalid dimensions or a non-positive sample count return `Err`, exit non-zero.
 - `--out` infers the encoder from the extension: `.ppm` → PPM, `.png` → PNG.
@@ -221,14 +249,28 @@ grazing-incidence [--width N] [--height N] [--samples N] [--seed N]
 - `--scene` accepts only scene names defined in `scene.rs`; an unknown name is
   an error listing the valid names.
 
+### Image dimensions per chapter
+
+The book's own numbers, used verbatim. Chapters 2–3 are 256×256; every chapter
+from 4 onward is 16:9 at width 400, which the camera rounds to 400×225.
+
+| Chapters | Width × height | Aspect | Notes |
+|---|---|---|---|
+| 2–3 | 256 × 256 | 1:1 | first images; no camera class yet |
+| 4–11 | 400 × 225 | 16:9 | samples per pixel grows 10 → 100 |
+| 12–13 | 400 × 225 | 16:9 | camera gains position, then aperture |
+| 14 (ours) | 400 × 225 | 16:9 | same image, PNG instead of PPM |
+| `cover` scene | 1200 × 675 | 16:9 | 500 spp, hours of CPU time |
+
 ## Verification gate per chapter
 
 Before each commit:
 
 1. `cargo build` is clean (no warnings).
 2. `cargo test` is green.
-3. `cargo run --release -- --out images/<chapter>.ppm` produces the chapter's
-   image, committed to `images/`.
+3. The chapter's image is rendered and committed to `images/`. Chapters 2–12
+   render to the hardcoded path `images/<chapter>.ppm`; from chapter 13 onward,
+   `cargo run --release -- --scene <name> --out images/<chapter>.png`.
 4. The image is opened and inspected.
 
 Step 4 is a human check and is the point of the exercise; steps 1–3 are
