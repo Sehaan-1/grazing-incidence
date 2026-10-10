@@ -59,6 +59,42 @@ pub fn render_scene(width: usize, height: usize) -> Result<Image, RenderError> {
 mod tests {
     use super::*;
 
+    fn close(a: f64, b: f64) {
+        assert!((a - b).abs() < 1e-9, "expected {b}, got {a}");
+    }
+
+    fn assert_vec_close(a: Vec3, b: Vec3) {
+        close(a.x, b.x);
+        close(a.y, b.y);
+        close(a.z, b.z);
+    }
+
+    #[test]
+    fn sky_is_blue_overhead_and_white_straight_down() {
+        // a = 0.5 * (unit.y + 1.0): +y is the tint, -y is white, y=0 is halfway.
+        assert_vec_close(
+            sky_color(Vec3::new(0.0, 1.0, 0.0)),
+            Vec3::new(0.5, 0.7, 1.0),
+        );
+        assert_vec_close(
+            sky_color(Vec3::new(0.0, -1.0, 0.0)),
+            Vec3::new(1.0, 1.0, 1.0),
+        );
+        assert_vec_close(
+            sky_color(Vec3::new(1.0, 0.0, 0.0)),
+            Vec3::new(0.75, 0.85, 1.0),
+        );
+
+        // The three above are already unit vectors, so they cannot tell a
+        // correct sky from one that skipped `.unit()`. (3,4,12) has length 13,
+        // giving unit.y = 4/13 and a = 17/26, hence 9/26 white and 17/26 tint:
+        // x = 9/26 + 17/52 = 35/52, y = 9/26 + 119/260 = 209/260, z = 1.
+        assert_vec_close(
+            sky_color(Vec3::new(3.0, 4.0, 12.0)),
+            Vec3::new(35.0 / 52.0, 209.0 / 260.0, 1.0),
+        );
+    }
+
     #[test]
     fn rejects_one_pixel_wide() {
         let err = render_scene(1, 4).unwrap_err();
