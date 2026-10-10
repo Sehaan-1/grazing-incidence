@@ -150,59 +150,82 @@ mod tests {
     }
 
     #[test]
-    fn image_is_the_right_way_up_ground_below_ball() {
+    fn sky_is_above_and_ground_below() {
         let image = render_scene(8, 8).unwrap();
         let width = image.width;
 
-        // Row-major, top row first: [0] is the top-left pixel and
-        // [7 * width] the bottom-left one, i.e. the two viewport corner rays.
-        //
-        // The §6 eye sits exactly on the surface of *both* spheres: the origin
-        // is 0.5 from the ball's centre and 1000 from the ground's, which is
-        // each sphere's own radius. So a ray enters the ball whenever it tilts
-        // up and the ground whenever it tilts down, the upper half of the frame
-        // is ball and the lower half is ground, and the row mirror in
-        // `render_scene` is what keeps the ground at the bottom.
-        //
-        // Up-corner ray (-1, 1, -1): the ball at (0, 0.5, 0) r 0.5 has roots
-        // t = 0 -- the origin itself, rejected by t_min -- and t = 1/3. The
-        // outward normal there is (-2/3, -1/3, -2/3); the ray arrives from
-        // inside, so the normal is flipped to (2/3, 1/3, 2/3), which faces the
-        // camera by -2/3. `shade` multiplies by 0.5 * (1 - 2/3) = 1/6.
-        let expected = Vec3::new(0.2, 0.3, 0.5) / 6.0;
-        assert_vec_close(Vec3::from_rgb(image.pixels[0]), expected);
-        assert_vec_close(Vec3::from_rgb(image.pixels[7 * width]), expected);
+        // Row-major, top row first: [0] is the top-left pixel and [7 * width]
+        // the bottom-left one, i.e. the two viewport corner rays.
+        let top = image.pixels[0];
+        let bottom = image.pixels[7 * width];
 
-        // The down-corner ray hits the ground and mirrors that exactly, which is
-        // why the two corners share a colour: this scene makes the frame
-        // vertically symmetric, so a colour check can no longer tell a mirrored
-        // write index from a correct one. `the_horizon_falls_on_the_vertical_
-        // centre_row` is the observable half of the layout.
-        assert!(image.pixels.iter().all(|p| p[2] < 0.5));
+        // The top row looks up. The corner direction (-1, 1, -1) misses both
+        // spheres -- for an upward ray the ground's quadratic has two negative
+        // roots, and the ball is behind the eye -- so this is `sky_color`. Its
+        // unit y is 1/sqrt(3), giving a = (1 + 1/sqrt(3)) / 2; blue is
+        // (1 - a) + a = 1 and red and green give up 0.5a and 0.3a respectively.
+        let sky_a = 0.5 * (1.0 + 1.0 / 3.0_f64.sqrt());
+        assert_vec_close(
+            Vec3::from_rgb(top),
+            Vec3::new(1.0 - 0.5 * sky_a, 1.0 - 0.3 * sky_a, 1.0),
+        );
+
+        // The bottom row looks down and hits the ground. Direction (-1,-1,-1)
+        // against (0,-100.5,-1) r = 100 gives a = 3, half_b = -101.5 and
+        // c = 101.25, so t = (101.5 - sqrt(9998.5)) / 3. The outward normal
+        // there has z = (1 - t) / 100, and `shade` scales by 0.5 * (1 - n.z).
+        let (a, half_b, c): (f64, f64, f64) = (3.0, -101.5, 101.25);
+        let t = (-half_b - (half_b * half_b - a * c).sqrt()) / a;
+        let k = 0.5 * (1.0 - (1.0 - t) / 100.0);
+        assert_vec_close(Vec3::from_rgb(bottom), Vec3::new(0.2, 0.3, 0.5) * k);
+
+        // Blue is the channel that tells the two apart: the sky pins it at 1.0
+        // while `shade` holds it under 0.5. Drop `let row = height - 1 - j;`
+        // and these two rows swap, so this comparison is what turns round.
+        assert!(
+            top[2] > bottom[2],
+            "sky should sit above ground, got top {top:?} and bottom {bottom:?}"
+        );
     }
 
     #[test]
     fn the_horizon_falls_on_the_vertical_centre_row() {
-        // 9 is odd, so j = 4 gives v = 0.5 exactly and the camera ray there is
-        // exactly horizontal (direction.y == 0). Both spheres are tangent to
-        // the origin, so a horizontal ray enters neither -- it misses both and
-        // takes the sky. `sky_color` gives a horizontal ray a = 0.5, hence
-        // 0.5 + 0.5 * (0.5, 0.7, 1.0) = (0.75, 0.85, 1.0).
+        // 9 is odd, so image row 4 is j = 4, v = 0.5 exactly and the left-edge
+        // ray there is exactly horizontal (direction.y == 0). Nothing in the §6
+        // world is hit by it: the ball at (0,0,-1) r = 0.5 needs dx^2 <= 1/3 and
+        // the left edge has dx = -1, and the ground at (0,-100.5,-1) r = 100 is
+        // 100.5 below the eye. So this pixel is `sky_color` with a = 0.5, giving
+        // 0.5 * (1,1,1) + 0.5 * (0.5, 0.7, 1.0) = (0.75, 0.85, 1.0).
         let image = render_scene(9, 9).unwrap();
         let width = image.width;
 
-        let horizon = 4 * width;
-        for x in 0..width {
-            let got = image.pixels[horizon + x];
-            for (c, expected) in [0.75, 0.85, 1.0].iter().enumerate() {
-                close(got[c], *expected);
-            }
-        }
+        assert_vec_close(
+            Vec3::from_rgb(image.pixels[4 * width]),
+            Vec3::new(0.75, 0.85, 1.0),
+        );
 
-        // The rows either side are the ball (looking up) and the ground (looking
-        // down). Blue is the channel that separates them from sky: `sky_color`
-        // pins it at 1.0, while `shade` scales it by 0.5 * (1 - n.z) <= 0.5.
-        assert!(image.pixels[3 * width][2] < 0.5);
-        assert!(image.pixels[5 * width][2] < 0.5);
+        // The ball's silhouette cuts into that horizon row: the centre ray
+        // (0, 0, -1) meets it head on at t = 1 - 0.5 = 0.5, where the outward
+        // normal is (0, 0, 1). That faces away from the camera, so `shade`
+        // returns 0.5 * (1 - 1) = 0 and the pixel is black. The old geometry had
+        // the eye on the ball's surface, so nothing could be drawn here.
+        assert_eq!(image.pixels[4 * width + 4], [0.0, 0.0, 0.0]);
+
+        // Along the left edge the horizon lands between rows 4 and 5: every row
+        // above it tilts up and misses both spheres, so its blue is the sky's
+        // exact 1.0; every row below tilts down into the ground, whose `shade`
+        // caps blue at 0.5 * (1 - 0) = 0.25.
+        for row in 0..=4 {
+            assert_eq!(
+                image.pixels[row * width][2],
+                1.0,
+                "row {row} should be sky, got {:?}",
+                image.pixels[row * width]
+            );
+        }
+        for row in 5..=8 {
+            let got = image.pixels[row * width];
+            assert!(got[2] < 0.5, "row {row} should be ground, got {got:?}");
+        }
     }
 }
