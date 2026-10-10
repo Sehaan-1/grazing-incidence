@@ -1,12 +1,17 @@
 //! `grazing-incidence` — a ray tracer built by porting *Ray Tracing in One
 //! Weekend* (v4.0.2) to Rust.
 //!
-//! The renderer is built chapter by chapter; see `docs/superpowers/specs/` for
-//! the design and the chapter-to-commit mapping. Modules appear as their
-//! chapters land.
+//! Modules appear as their chapters land; see `docs/superpowers/specs/` for the
+//! chapter-to-commit mapping.
 
-/// Ray-tracing core.
+pub mod cli;
+pub mod error;
+pub mod image;
 pub mod renderer;
 
-/// Scene description and the built-in scenes.
-pub mod scene;
+/// Pi, as used throughout the book.
+pub const PI: f64 = 3.1415926535897932385;
+
+pub fn degrees_to_radians(degrees: f64) -> f64 {
+    degrees * PI / 180.0
+}
