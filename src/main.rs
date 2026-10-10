@@ -26,27 +26,26 @@ fn main() {
 }
 
 fn run(opts: &Options) -> Result<(), RenderError> {
-    // Checked before anything is written, so `--out somewhere.png` fails
-    // without having created the directory it names.
-    // Until chapter 14 there is only a PPM encoder.
-    let path = Path::new(&opts.out);
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-    {
-        return Err(RenderError::UnsupportedFormat {
-            extension: "png".to_string(),
-        });
-    }
-
     let image = renderer::render_scene(opts)?;
 
+    let path = Path::new(&opts.out);
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
             std::fs::create_dir_all(dir)?;
         }
     }
-    image.write_ppm(path, renderer::GAMMA)?;
+
+    // The extension picks the encoder: `.png` gets the compressed one,
+    // anything else the PPM that has always been there.
+    let is_png = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+
+    if is_png {
+        image.write_png(path, renderer::GAMMA)?;
+    } else {
+        image.write_ppm(path, renderer::GAMMA)?;
+    }
 
     println!("wrote {}", path.display());
     Ok(())

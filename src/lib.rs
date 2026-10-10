@@ -11,6 +11,7 @@ pub mod hittable;
 pub mod image;
 pub mod interval;
 pub mod material;
+pub mod png;
 pub mod ray;
 pub mod renderer;
 pub mod rng;
