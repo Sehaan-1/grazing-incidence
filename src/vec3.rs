@@ -76,6 +76,26 @@ impl Vec3 {
     }
 }
 
+/// Colour-only constructors. `Color` is an alias for `Vec3`, so inherent
+/// methods have to live in `impl Color` to be reachable as `Color::random`;
+/// putting them in the `impl Vec3` block above would make them `Vec3::random`
+/// and lose the colour reading at the call site.
+impl Color {
+    /// A uniformly random colour with each component in `[0, 1)` (§10).
+    pub fn random(rng: &mut crate::rng::Rng) -> Self {
+        Self::new(rng.f64(), rng.f64(), rng.f64())
+    }
+
+    /// A uniformly random colour with each component in `[min, max)` (§10).
+    pub fn random_range(rng: &mut crate::rng::Rng, min: f64, max: f64) -> Self {
+        Self::new(
+            rng.range(min, max),
+            rng.range(min, max),
+            rng.range(min, max),
+        )
+    }
+}
+
 /// Reflect `v` about a unit normal `n` (§10).
 pub fn reflect(v: Vec3, n: Vec3) -> Vec3 {
     v - 2.0 * v.dot(n) * n
@@ -282,6 +302,60 @@ mod tests {
         let v = Vec3::new(0.1, 0.2, 0.3);
         assert_eq!(v.to_rgb(), [0.1, 0.2, 0.3]);
         assert_vec_close(Vec3::from_rgb([0.1, 0.2, 0.3]), v);
+    }
+
+    #[test]
+    fn color_random_takes_three_draws_in_component_order() {
+        // `Color::random` is `Vec3::new(rng.f64(), rng.f64(), rng.f64())`, so it
+        // is the first three values a fresh seed yields, in order.
+        let mut rng = crate::rng::Rng::seed_from_u64(9);
+        let expected = Vec3::new(rng.f64(), rng.f64(), rng.f64());
+
+        let mut rng = crate::rng::Rng::seed_from_u64(9);
+        assert_eq!(Color::random(&mut rng), expected);
+    }
+
+    #[test]
+    fn color_random_stays_in_the_unit_interval() {
+        let mut rng = crate::rng::Rng::seed_from_u64(31);
+        for _ in 0..10_000 {
+            let c = Color::random(&mut rng);
+            for component in [c.x, c.y, c.z] {
+                assert!(
+                    (0.0..1.0).contains(&component),
+                    "random colour left [0, 1): {c:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn color_random_range_is_an_affine_rescale_of_three_draws() {
+        // `random_range(min, max)` is `min + (max - min) * f64()` three times,
+        // which is what `Rng::range` does.
+        let mut rng = crate::rng::Rng::seed_from_u64(12);
+        let expected = Vec3::new(
+            rng.range(0.2, 0.4),
+            rng.range(0.2, 0.4),
+            rng.range(0.2, 0.4),
+        );
+
+        let mut rng = crate::rng::Rng::seed_from_u64(12);
+        assert_eq!(Color::random_range(&mut rng, 0.2, 0.4), expected);
+    }
+
+    #[test]
+    fn color_random_range_respects_its_bounds() {
+        let mut rng = crate::rng::Rng::seed_from_u64(5);
+        for _ in 0..10_000 {
+            let c = Color::random_range(&mut rng, -0.5, 2.5);
+            for component in [c.x, c.y, c.z] {
+                assert!(
+                    (-0.5..2.5).contains(&component),
+                    "random colour left [-0.5, 2.5): {c:?}"
+                );
+            }
+        }
     }
 
     #[test]

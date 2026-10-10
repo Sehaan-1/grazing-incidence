@@ -7,8 +7,8 @@ use crate::image::Image;
 use crate::rng::Rng;
 use crate::scene::{self, Scene};
 
-/// Whether to apply the sqrt gamma encode when writing pixels (§9).
-pub const GAMMA: bool = false;
+/// Gamma correction landed with diffuse materials in §9.
+pub const GAMMA: bool = true;
 
 /// The seed every committed image is rendered with, so reruns are identical.
 pub const DEFAULT_SEED: u64 = 0;
@@ -79,6 +79,34 @@ mod tests {
         // `du` is below 1, so every sample stays inside [0, 1) and no channel
         // can go NaN or infinite.
         assert!(image.pixels.iter().flatten().all(|c| c.is_finite()));
+    }
+
+    #[test]
+    fn gamma_is_on_and_is_the_encode_that_reaches_the_file() {
+        assert!(GAMMA, "gamma correction landed in §9 and stays on");
+
+        let image = render_with_seed(6, 4, DEFAULT_SEED);
+        let path = std::env::temp_dir().join("gi_renderer_gamma.ppm");
+        image.write_ppm(&path, GAMMA).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let header = b"P6\n6 4\n255\n";
+        assert_eq!(&bytes[..header.len()], header);
+        let body = &bytes[header.len()..];
+
+        // Every byte is the sqrt of the linear channel, not the channel itself:
+        // `write_ppm` is the only place gamma is applied, so this is where the
+        // committed images pick it up.
+        for (index, pixel) in image.pixels.iter().enumerate() {
+            for (channel, &linear) in pixel.iter().enumerate() {
+                assert_eq!(
+                    body[index * 3 + channel],
+                    (256.0 * linear.sqrt().clamp(0.0, 0.999)) as u8,
+                    "pixel {index} channel {channel} is {linear}"
+                );
+            }
+        }
+
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

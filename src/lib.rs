@@ -10,6 +10,7 @@ pub mod error;
 pub mod hittable;
 pub mod image;
 pub mod interval;
+pub mod material;
 pub mod ray;
 pub mod renderer;
 pub mod rng;

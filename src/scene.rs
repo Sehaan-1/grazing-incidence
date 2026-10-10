@@ -1,6 +1,7 @@
 //! Named scenes.
 
 use crate::hittable::Hittable;
+use crate::material::Material;
 use crate::sphere::Sphere;
 use crate::vec3::Vec3;
 
@@ -19,9 +20,17 @@ pub fn build(scene: Scene) -> Vec<Box<dyn Hittable>> {
         // (0, -1000, 0) with r = 1000 put that surface exactly at y = 0, so the
         // camera sat on it and no ray ever reached the sky.
         Scene::Spheres => {
-            let ball = Sphere::new(Vec3::new(0.0, 0.0, -1.0), 0.5);
-            let ground = Sphere::new(Vec3::new(0.0, -100.5, -1.0), 100.0);
-            vec![Box::new(ball), Box::new(ground)]
+            let ground = Sphere::new(
+                Vec3::new(0.0, -100.5, -1.0),
+                100.0,
+                Material::lambertian(Vec3::new(0.5, 0.5, 0.5)),
+            );
+            let ball = Sphere::new(
+                Vec3::new(0.0, 0.0, -1.0),
+                0.5,
+                Material::lambertian(Vec3::new(0.7, 0.3, 0.3)),
+            );
+            vec![Box::new(ground), Box::new(ball)]
         }
     }
 }
