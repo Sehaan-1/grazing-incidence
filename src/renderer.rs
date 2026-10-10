@@ -1,8 +1,9 @@
 //! Rendering entry point.
 
 use crate::camera::{
+    CHAPTER_THIRTEEN_DEFOCUS_ANGLE, CHAPTER_THIRTEEN_FOCUS_DIST, CHAPTER_THIRTEEN_VFOV,
     CHAPTER_TWELVE_ASPECT, CHAPTER_TWELVE_DEPTH, CHAPTER_TWELVE_LOOKAT, CHAPTER_TWELVE_LOOKFROM,
-    CHAPTER_TWELVE_VFOV, CHAPTER_TWELVE_VUP, Camera,
+    CHAPTER_TWELVE_VUP, Camera,
 };
 use crate::cli::Options;
 use crate::error::RenderError;
@@ -14,14 +15,21 @@ use crate::scene::{self, Scene};
 /// Whether to apply the sqrt gamma encode when writing pixels (§9).
 pub const GAMMA: bool = true;
 
-/// Cast `opts.samples_per_pixel` jittered rays per pixel through the §12
-/// camera and shade each hit (§6, §8, §12).
+/// Cast `opts.samples_per_pixel` jittered rays per pixel through the §13
+/// camera and shade each hit (§6, §8, §12, §13).
 ///
-/// The framing is the book's §12 listing -- a 90-degree lens from
-/// (-2, 2, 1) looking at (0, 0, -1) -- while the width, the sample count, the
-/// seed and the scene come from the command line. §12 is what makes the width
-/// the only dimension a caller has to give: the height follows from the 16:9
-/// aspect ratio.
+/// The lens is the book's §13 listing -- a 20-degree lens from (-2, 2, 1)
+/// looking at (0, 0, -1), behind a 10-degree aperture focused at 3.4 -- while
+/// the width, the sample count, the seed and the scene come from the command
+/// line. §12 is what makes the width the only dimension a caller has to give:
+/// the height follows from the 16:9 aspect ratio. §13 is what makes the
+/// background soft: rays leave from across the lens rather than from one point,
+/// so anything off the plane of focus spreads over a cone instead of resolving
+/// to a single pixel.
+///
+/// `Camera::chapter_thirteen` hardcodes the same lens but also hardcodes 400
+/// wide at 100 samples. This has to honour `--width` and `--samples`, so it
+/// reads the §13 constants directly rather than calling that constructor.
 pub fn render_scene(opts: &Options) -> Result<Image, RenderError> {
     let scene = Scene::from_name(&opts.scene).ok_or_else(|| RenderError::UnknownScene {
         name: opts.scene.clone(),
@@ -32,10 +40,12 @@ pub fn render_scene(opts: &Options) -> Result<Image, RenderError> {
         opts.samples_per_pixel,
         CHAPTER_TWELVE_DEPTH,
         CHAPTER_TWELVE_ASPECT,
-        CHAPTER_TWELVE_VFOV,
+        CHAPTER_THIRTEEN_VFOV,
         CHAPTER_TWELVE_LOOKFROM,
         CHAPTER_TWELVE_LOOKAT,
         CHAPTER_TWELVE_VUP,
+        CHAPTER_THIRTEEN_DEFOCUS_ANGLE,
+        CHAPTER_THIRTEEN_FOCUS_DIST,
     );
 
     // Both axes are still held to 2, even though only the width is a parameter
