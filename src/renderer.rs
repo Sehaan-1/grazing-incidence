@@ -2,11 +2,21 @@
 
 use crate::error::RenderError;
 use crate::image::Image;
+use crate::ray::Ray;
+use crate::vec3::Vec3;
 
 /// Whether to apply the sqrt gamma encode when writing pixels (§9).
 pub const GAMMA: bool = false;
 
-/// The book's first image: a red/green gradient.
+/// The sky: white at the horizon, blue overhead (§4).
+fn sky_color(direction: Vec3) -> Vec3 {
+    let unit_direction = direction.unit();
+    let a = 0.5 * (unit_direction.y + 1.0);
+    Vec3::UNIT * (1.0 - a) + Vec3::new(0.5, 0.7, 1.0) * a
+}
+
+/// Cast one ray per pixel through a viewport at the origin, and shade it with
+/// [`sky_color`] (§4).
 ///
 /// `width` and `height` must both be at least 2: the loop normalises each axis by
 /// `axis - 1`, so a 1-pixel axis divides by zero and every channel becomes NaN.
@@ -19,13 +29,25 @@ pub fn render_scene(width: usize, height: usize) -> Result<Image, RenderError> {
 
     let mut image = Image::new(width, height)?;
 
+    let viewport_height = 2.0;
+    let viewport_width = viewport_height * (width as f64 / height as f64);
+
+    let origin = Vec3::ZERO;
+    let horizontal = Vec3::new(viewport_width, 0.0, 0.0);
+    let vertical = Vec3::new(0.0, viewport_height, 0.0);
+    let lower_left_corner = origin - horizontal / 2.0 - vertical / 2.0 - Vec3::new(0.0, 0.0, 1.0);
+
     for j in 0..height {
         eprint!("\rScanlines remaining: {} ", height - j);
         for i in 0..width {
-            let r = i as f64 / (width - 1) as f64;
-            let g = j as f64 / (height - 1) as f64;
-            let b = 0.0;
-            image.set(i, j, [r + 0.5, g + 0.5, b + 0.5]);
+            let u = i as f64 / (width - 1) as f64;
+            let v = j as f64 / (height - 1) as f64;
+            let direction = lower_left_corner + horizontal * u + vertical * v - origin;
+            image.set(
+                i,
+                j,
+                sky_color(Ray::new(origin, direction).direction).to_rgb(),
+            );
         }
     }
     eprintln!("\rDone.                 ");

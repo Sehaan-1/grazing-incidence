@@ -7,6 +7,7 @@
 pub mod cli;
 pub mod error;
 pub mod image;
+pub mod ray;
 pub mod renderer;
 pub mod vec3;
 
