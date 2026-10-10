@@ -3,6 +3,7 @@
 use crate::error::RenderError;
 use crate::image::Image;
 use crate::ray::Ray;
+use crate::sphere::Sphere;
 use crate::vec3::Vec3;
 
 /// Whether to apply the sqrt gamma encode when writing pixels (§9).
@@ -15,18 +16,8 @@ fn sky_color(direction: Vec3) -> Vec3 {
     Vec3::UNIT * (1.0 - a) + Vec3::new(0.5, 0.7, 1.0) * a
 }
 
-/// Cast one ray per pixel through a viewport at the origin, and shade it with
-/// [`sky_color`] (§4).
-///
-/// `width` and `height` must both be at least 2: the loop normalises each axis by
-/// `axis - 1`, so a 1-pixel axis divides by zero and every channel becomes NaN.
-/// NaN survives `f64::clamp` and truncates to 0 as `u8`, so without this guard a
-/// 1xN render silently writes a black image instead of reporting the mistake.
-pub fn render_scene(width: usize, height: usize) -> Result<Image, RenderError> {
-    if width < 2 || height < 2 {
-        return Err(RenderError::InvalidDimension { width, height });
-    }
-
+/// The book sphere and the sky behind it (§5).
+fn render_sphere(width: usize, height: usize) -> Result<Image, RenderError> {
     let mut image = Image::new(width, height)?;
 
     let viewport_height = 2.0;
@@ -37,22 +28,45 @@ pub fn render_scene(width: usize, height: usize) -> Result<Image, RenderError> {
     let vertical = Vec3::new(0.0, viewport_height, 0.0);
     let lower_left_corner = origin - horizontal / 2.0 - vertical / 2.0 - Vec3::new(0.0, 0.0, 1.0);
 
+    let sphere = Sphere::new(Vec3::new(0.0, 0.0, -1.0), 0.5);
+
     for j in 0..height {
         eprint!("\rScanlines remaining: {} ", height - j);
         for i in 0..width {
             let u = i as f64 / (width - 1) as f64;
             let v = j as f64 / (height - 1) as f64;
-            let direction = lower_left_corner + horizontal * u + vertical * v - origin;
-            image.set(
-                i,
-                j,
-                sky_color(Ray::new(origin, direction).direction).to_rgb(),
+            let ray = Ray::new(
+                origin,
+                lower_left_corner + horizontal * u + vertical * v - origin,
             );
+
+            let color = match sphere.hit(&ray, 0.001, f64::INFINITY) {
+                Some(t) => {
+                    let normal = (ray.at(t) - sphere.center).unit();
+                    Vec3::new(1.0, 0.2, 0.2) * (0.5 * (normal.dot(Vec3::new(0.0, 0.0, -1.0)) + 1.0))
+                }
+                None => sky_color(ray.direction),
+            };
+            image.set(i, j, color.to_rgb());
         }
     }
     eprintln!("\rDone.                 ");
 
     Ok(image)
+}
+
+/// Cast one ray per pixel and shade each hit against the sky (§5).
+///
+/// `width` and `height` must both be at least 2: the loop normalises each axis by
+/// `axis - 1`, so a 1-pixel axis divides by zero and every channel becomes NaN.
+/// NaN survives `f64::clamp` and truncates to 0 as `u8`, so without this guard a
+/// 1xN render silently writes a black image instead of reporting the mistake.
+pub fn render_scene(width: usize, height: usize) -> Result<Image, RenderError> {
+    if width < 2 || height < 2 {
+        return Err(RenderError::InvalidDimension { width, height });
+    }
+
+    render_sphere(width, height)
 }
 
 #[cfg(test)]
