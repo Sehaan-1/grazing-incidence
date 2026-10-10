@@ -1,0 +1,17 @@
+# Local reference copy of the book - copyrighted, not redistributed.
+raytracing-github-io-books-RayTracingInOneWeekend-html.md
+
+# Rust / Cargo
+/target
+**/*.rs.bk
+
+# Render scratch space (committed output goes in images/, not here)
+out/
+scratch/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,6 @@
+# Normalize line endings so chapter diffs stay clean across platforms.
+* text=auto eol=lf
+
+# Binary renders must never be line-ending translated.
+*.ppm binary
+*.png binary
