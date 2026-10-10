@@ -12,6 +12,7 @@ pub mod image;
 pub mod interval;
 pub mod ray;
 pub mod renderer;
+pub mod rng;
 pub mod scene;
 pub mod sphere;
 pub mod vec3;
