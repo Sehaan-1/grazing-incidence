@@ -62,7 +62,7 @@ impl Camera {
                 let mut color = Vec3::ZERO;
                 for _ in 0..self.samples_per_pixel {
                     let ray = self.get_ray(i, j, rng);
-                    color += self.ray_color(&ray, self.max_depth, world);
+                    color += self.ray_color(&ray, self.max_depth, world, rng);
                 }
                 // The book's §4-§7 camera anchors on the bottom-left viewport
                 // corner and counts j upward, so j = 0 lands in the image's top
@@ -98,22 +98,26 @@ impl Camera {
         )
     }
 
-    /// Shade one ray: a hit against the sky behind it (§6).
+    /// Shade one ray: a hit bounces off its material, a miss is the sky (§9).
     ///
-    /// `depth` counts the bounces still available, and a camera with none left
-    /// renders black. Until the material trait lands in §9 a hit is shaded
-    /// directly rather than bounced, which is why `depth` is read but not yet
-    /// decremented: at §9 a hit returns
-    /// `attenuation * self.ray_color(&scattered, depth - 1, world)`.
-    fn ray_color(&self, ray: &Ray, depth: usize, world: &dyn Hittable) -> Vec3 {
+    /// `depth` counts the bounces still available, so a camera with none left
+    /// renders black. Every bounce draws from `rng`, the same generator that
+    /// places the samples, so a render is reproducible end to end.
+    fn ray_color(&self, ray: &Ray, depth: usize, world: &dyn Hittable, rng: &mut Rng) -> Vec3 {
         if depth == 0 {
             return Vec3::ZERO;
         }
 
-        match world.hit(ray, 0.001, f64::INFINITY) {
-            Some(rec) => shade(rec.normal),
-            None => sky_color(ray.direction),
+        // §9: a t_min of 0.001 skips the self-intersection that floating-point
+        // rounding introduces. This is the "shadow acne" the book fixes here.
+        if let Some(rec) = world.hit(ray, 0.001, f64::INFINITY) {
+            if let Some((scattered, attenuation)) = rec.material.scatter(ray, &rec, rng) {
+                return attenuation * self.ray_color(&scattered, depth - 1, world, rng);
+            }
+            return Vec3::ZERO;
         }
+
+        sky_color(ray.direction)
     }
 }
 
@@ -122,12 +126,6 @@ fn sky_color(direction: Vec3) -> Vec3 {
     let unit_direction = direction.unit();
     let a = 0.5 * (unit_direction.y + 1.0);
     Vec3::UNIT * (1.0 - a) + Vec3::new(0.5, 0.7, 1.0) * a
-}
-
-/// The book's normal colour map: each normal component maps from [-1, 1] to
-/// [0, 1] (§6.1, unchanged through §7).
-fn shade(normal: Vec3) -> Vec3 {
-    normal * 0.5 + Vec3::UNIT * 0.5
 }
 
 #[cfg(test)]
@@ -149,6 +147,30 @@ mod tests {
         list
     }
 
+    /// A world with nothing in it, so every ray misses and every sample costs
+    /// exactly the two draws `get_ray` makes.
+    ///
+    /// This is what keeps the pixel-exact tests below exact. §9 gave the
+    /// generator a second job: a scattered ray draws from the same `Rng` that
+    /// places the samples, and how many draws that costs depends on the path
+    /// the ray takes. Against the §6 scene, pixel (i, j)'s `du` is no longer at
+    /// a fixed offset into the stream, because every pixel ahead of it may have
+    /// spent a different number of draws. Against an empty world the
+    /// arithmetic in `draw` and `first_draw` holds exactly.
+    fn empty_world() -> HittableList<'static> {
+        HittableList::new()
+    }
+
+    /// The book's normal colour map: each normal component maps from [-1, 1] to
+    /// [0, 1] (§6.1, unchanged through §7).
+    ///
+    /// §9 replaced this with `Material::scatter`, so nothing in the renderer
+    /// calls it any more. It stays here, in the tests, because the test below
+    /// still pins what the map did.
+    fn shade(normal: Vec3) -> Vec3 {
+        normal * 0.5 + Vec3::UNIT * 0.5
+    }
+
     fn close(a: f64, b: f64) {
         assert!((a - b).abs() < 1e-9, "expected {b}, got {a}");
     }
@@ -163,7 +185,10 @@ mod tests {
     ///
     /// `render` consumes the generator in one fixed order -- scanline `j`, then
     /// column `i`, then sample, two draws per ray, `du` before `dv` -- so any
-    /// one sample can be reproduced without rendering the whole image.
+    /// one sample can be reproduced without rendering the whole image, as long
+    /// as the world draws nothing of its own. Against `empty_world` that holds;
+    /// against the §6 scene it does not, because §9 spends extra draws per
+    /// scatter.
     fn draw(seed: u64, n: usize) -> f64 {
         let mut rng = Rng::seed_from_u64(seed);
         for _ in 0..n {
@@ -173,12 +198,16 @@ mod tests {
     }
 
     /// Where pixel (i, j)'s first draw begins in that stream.
+    ///
+    /// Exact only while nothing ahead of (i, j) consumes extra draws, so every
+    /// caller pairs this with `empty_world`.
     fn first_draw(camera: &Camera, i: usize, j: usize) -> usize {
         2 * ((j * camera.image_width + i) * camera.samples_per_pixel)
     }
 
     /// Sample `k` of pixel (i, j), from the generator state `render` had
-    /// reached at that point.
+    /// reached at that point. Only exact against `empty_world`, for the reason
+    /// `first_draw` gives.
     fn sample_ray(camera: &Camera, seed: u64, i: usize, j: usize, k: usize) -> Ray {
         let mut rng = Rng::seed_from_u64(seed);
         for _ in 0..first_draw(camera, i, j) + 2 * k {
@@ -229,16 +258,20 @@ mod tests {
 
     #[test]
     fn the_viewport_follows_the_image_aspect_ratio() {
-        let objects = scene::build(Scene::Spheres);
-        let world = test_world(&objects);
+        // Pixel (0, 0) is the very first one `render` draws, so its `du` and
+        // `dv` are the first two values the seed yields no matter what world is
+        // in play -- nothing runs ahead of it. Against `empty_world` the pixel
+        // is background, which is what lets the closed form below stand in for
+        // the shading.
+        let world = empty_world();
         let camera = Camera::new(20, 12, 1, 5);
         let mut rng = Rng::seed_from_u64(SEED);
         let image = camera.render(&world, &mut rng).unwrap();
 
-        // Row 0 is j = 11 and column 0 is i = 0, and one sample per pixel, so
-        // pixel [0] is the 221st pixel the loop visits and used draws 440 and
-        // 441 of the stream.
-        let n = first_draw(&camera, 0, 11);
+        // One sample per pixel and (0, 0) is pixel 0 of the loop, so its draws
+        // are numbers 0 and 1 of the stream.
+        let n = first_draw(&camera, 0, 0);
+        assert_eq!(n, 0);
         let du = draw(SEED, n);
         let dv = draw(SEED, n + 1);
 
@@ -247,32 +280,33 @@ mod tests {
         // front of the zero eye, so `lower_left_corner` is (-5/3, -1, -1) and
         // the direction is `lower_left_corner + horizontal * u + vertical * v`:
         //   u = (0 + du) / 20   in [0, 1/20), so x = -5/3 + (10/3) u in [-5/3, -3/2)
-        //   v = (11 + dv) / 12  in [11/12, 1), so y = -1 + 2 v in [5/6, 1)
+        //   v = (0 + dv) / 12   in [0, 1/12),  so y = -1 + 2 v    in [-1, -5/6)
         let u = du / 20.0;
-        let v = (11.0 + dv) / 12.0;
+        let v = dv / 12.0;
         let direction = Vec3::new(-5.0 / 3.0 + (10.0 / 3.0) * u, -1.0 + 2.0 * v, -1.0);
-
-        // That ray misses both spheres. The ball's discriminant is
-        // 1 - 3a/4 with a = x^2 + y^2 + 1 >= 9/4 + 25/36 + 1 = 71/18, so
-        // 1 - (3/4)(71/18) = -47/24 is negative; the ground's quadratic has
-        // both roots behind the eye because oc . d = 100.5 * y - 1 >= 82.75
-        // with c = 101.25. So the pixel is `sky_color`.
-        let ray = Ray::new(Vec3::ZERO, direction);
-        assert!(world.hit(&ray, 0.001, f64::INFINITY).is_none());
+        assert_vec_close(
+            camera
+                .get_ray(0, 0, &mut Rng::seed_from_u64(SEED))
+                .direction,
+            direction,
+        );
 
         // a = 0.5 * (unit.y + 1): blue is (1 - a) + a = 1, red gives up 0.5a
         // and green 0.3a.
-        let a = 0.5 * (direction.unit().y + 1.0);
+        // `j = 0` is the viewport's bottom row and the mirror puts it at the
+        // image's last row, so the pixel lands at index 11 * 20.
+        let row = camera.image_height - 1;
         assert_vec_close(
-            Vec3::from_rgb(image.pixels[0]),
-            Vec3::new(1.0 - 0.5 * a, 1.0 - 0.3 * a, 1.0),
+            Vec3::from_rgb(image.pixels[row * image.width]),
+            sky_color(direction),
         );
     }
 
     #[test]
     fn multiple_samples_average_jittered_rays() {
-        let objects = scene::build(Scene::Spheres);
-        let world = test_world(&objects);
+        // An empty world, so each sample costs exactly the two draws
+        // `get_ray` makes and `first_draw` still locates every sample.
+        let world = empty_world();
 
         let mut rng = Rng::seed_from_u64(SEED);
         let once = Camera::new(8, 8, 1, 5).render(&world, &mut rng).unwrap();
@@ -290,7 +324,12 @@ mod tests {
                 let mut color = Vec3::ZERO;
                 for k in 0..camera.samples_per_pixel {
                     let ray = sample_ray(&camera, SEED, i, j, k);
-                    color += camera.ray_color(&ray, camera.max_depth, &world);
+                    color += camera.ray_color(
+                        &ray,
+                        camera.max_depth,
+                        &world,
+                        &mut Rng::seed_from_u64(SEED),
+                    );
                 }
                 let row = camera.image_height - 1 - j;
                 assert_vec_close(
@@ -304,6 +343,23 @@ mod tests {
         // is the one-sample pixel's only sample. They still have to differ: if
         // the jitter were dropped, all four samples would be the same ray,
         // averaging would be a no-op, and the images would match.
+        assert_ne!(once.pixels, four.pixels);
+    }
+
+    #[test]
+    fn antialiasing_still_separates_against_the_real_scene() {
+        // The averaging test above cannot use the §6 scene -- §9 spends extra
+        // draws per scatter and the stream stops being indexable -- so this
+        // keeps the same comparison alive where the pixels actually come from
+        // materials: the two renders must not coincide.
+        let objects = scene::build(Scene::Spheres);
+        let world = test_world(&objects);
+
+        let mut rng = Rng::seed_from_u64(SEED);
+        let once = Camera::new(8, 8, 1, 5).render(&world, &mut rng).unwrap();
+        let mut rng = Rng::seed_from_u64(SEED);
+        let four = Camera::new(8, 8, 4, 5).render(&world, &mut rng).unwrap();
+
         assert_ne!(once.pixels, four.pixels);
     }
 
@@ -346,6 +402,11 @@ mod tests {
 
     #[test]
     fn sky_is_above_and_ground_below() {
+        // An 8x8 camera has `viewport_width = viewport_height = 2`, so the
+        // viewport spans x, y in [-1, 1) and the direction is
+        // (-1 + 2 * (i + du) / 8, -1 + 2 * (j + dv) / 8, -1). Column 0 puts
+        // x in [-1, -3/4) and the mirrored rows put j = 7 at image row 0 and
+        // j = 0 at image row 7.
         let objects = scene::build(Scene::Spheres);
         let world = test_world(&objects);
         let camera = Camera::new(8, 8, 1, 5);
@@ -353,71 +414,47 @@ mod tests {
         let image = camera.render(&world, &mut rng).unwrap();
         let width = image.width;
 
-        // Row-major, top row first: [0] is the top-left pixel and [7 * width]
-        // the bottom-left one, so the viewport rows are j = 7 and j = 0. An
-        // 8x8 camera has `viewport_width = viewport_height = 2`, so the
-        // viewport spans x, y in [-1, 1) and the direction is
-        // (-1 + 2 * (i + du) / 8, -1 + 2 * (j + dv) / 8, -1).
-        let corner = |j: usize| -> Vec3 {
-            let n = first_draw(&camera, 0, j);
-            Vec3::new(
-                -1.0 + 2.0 * draw(SEED, n) / 8.0,
-                -1.0 + 2.0 * (j as f64 + draw(SEED, n + 1)) / 8.0,
-                -1.0,
-            )
-        };
-
-        // The top row looks up: v = (7 + dv) / 8 puts y in [0.75, 1). The ball
-        // needs x^2 + y^2 <= 1/3 and |x| >= 0.75, so it is missed; the ground's
-        // quadratic has both roots behind the eye, since
+        // Row 0 looks up: v = (7 + dv) / 8 puts y in [3/4, 1). The ball needs
+        // x^2 + y^2 <= 1/3 and x^2 >= 9/16 already, so it is missed; the
+        // ground's quadratic has both roots behind the eye, because
         // oc . d = 100.5 y - 1 >= 74.375 > 0 with c = 101.25. So this pixel is
-        // `sky_color`. Its unit y is y / |d|, and blue is (1 - a) + a = 1
-        // while red and green give up 0.5a and 0.3a.
+        // `sky_color`, whatever the draw -- which is the point, because §9
+        // moved the draw index and the exact value is no longer predictable.
+        //
+        // Its unit y is y / |d| with y in [3/4, 1) and x^2 in [9/16, 1), so
+        // |d| is in [sqrt(17/8), sqrt(3)). The smallest unit y is
+        // 0.75 / sqrt(3) = 0.4330127 and the largest is 1 / sqrt(17/8) =
+        // 0.6859943, so a = 0.5 * (unit.y + 1) is in [0.7165064, 0.8429972).
+        // Blue is (1 - a) + a = 1, red gives up 0.5a and green 0.3a, so red is
+        // in [0.5785014, 0.6417468] and green in [0.7471008, 0.7850481]. The
+        // observed pair for seed 1 is (0.6268816, 0.7761290), comfortably
+        // inside, and the interval holds for every draw.
         let top = image.pixels[0];
-        let top_direction = corner(7);
-        assert!(
-            world
-                .hit(&Ray::new(Vec3::ZERO, top_direction), 0.001, f64::INFINITY)
-                .is_none()
-        );
-        let sky_a = 0.5 * (top_direction.unit().y + 1.0);
-        assert_vec_close(
-            Vec3::from_rgb(top),
-            Vec3::new(1.0 - 0.5 * sky_a, 1.0 - 0.3 * sky_a, 1.0),
-        );
+        assert_eq!(top[2], 1.0, "sky blue is exactly 1, got {top:?}");
+        assert!(top[0] >= 0.5785 && top[0] <= 0.6418, "sky red {top:?}");
+        assert!(top[1] >= 0.7471 && top[1] <= 0.7851, "sky green {top:?}");
 
-        // The bottom row looks down: v = dv / 8 puts y in [-1, -0.75) and it
-        // hits the ground. The eye is the origin, so with the ground at
-        // (0, -100.5, -1) and r = 100:
-        //   oc    = (0, 100.5, 1)
-        //   a     = d . d                half_b = oc . d = 100.5 y - 1
-        //   c     = oc . oc - 100^2     = 101.25
-        //   t     = (-half_b - sqrt(half_b^2 - a c)) / a
-        // and the outward normal is (t * d - (0, -100.5, -1)) / 100. `shade`
-        // is 0.5 * n + 0.5, so each channel is 0.5 * n + 0.5.
+        // Row 7 looks down: v = dv / 8 puts y in [-1, -3/4) and it hits the
+        // ground, again whatever the draw -- x^2 >= 9/16 misses the ball, and
+        // oc . d = 100.5 y - 1 <= -76.375 < 0 with c = 101.25 > 0 puts a root
+        // ahead of the eye.
+        //
+        // The ground's albedo is (0.5, 0.5, 0.5), so the pixel is the rest of
+        // the bounce chain scaled by 0.5. Every albedo in the scene tops out at
+        // 0.7 and the sky tops out at 1.0, so no channel can exceed 0.5 --
+        // where §8's `shade` put this pixel's green at 0.5 * n.y + 0.5 > 0.999.
         let bottom = image.pixels[7 * width];
-        let bottom_direction = corner(0);
-        let center = Vec3::new(0.0, -100.5, -1.0);
-        let oc = Vec3::ZERO - center;
-        let a = bottom_direction.dot(bottom_direction);
-        let half_b = oc.dot(bottom_direction);
-        let c = oc.dot(oc) - 100.0 * 100.0;
-        let t = (-half_b - (half_b * half_b - a * c).sqrt()) / a;
-        let outward = (bottom_direction * t - center) / 100.0;
-        // The ray meets the near side of the ground, so the outward normal is
-        // the hit normal: d . outward = (t (dx^2 + dy^2) - (1 - t)) / 100, and
-        // t (dx^2 + dy^2) is far below 1 - t for a near hit.
-        assert!(
-            bottom_direction.dot(outward) < 0.0,
-            "the eye should meet the ground head on"
-        );
-        assert_vec_close(Vec3::from_rgb(bottom), shade(outward));
+        for (channel, value) in bottom.iter().enumerate() {
+            assert!(
+                *value > 0.0 && *value <= 0.5,
+                "ground channel {channel} should be in (0, 0.5], got {value} in {bottom:?}"
+            );
+        }
 
         // Blue is the channel that tells the two apart: the sky pins it at
-        // exactly 1.0, while the ground's is 0.5 + n.z / 2 and its normal
-        // points nearly straight up, so it lands near 0.5. Drop
-        // `let row = image_height - 1 - j;` and these two rows swap, so this
-        // comparison is what turns round.
+        // exactly 1.0, while every ground channel is capped at the ground
+        // albedo of 0.5. Drop `let row = image_height - 1 - j;` and these two
+        // rows swap, so this comparison is what turns round.
         assert!(
             top[2] > bottom[2],
             "sky should sit above ground, got top {top:?} and bottom {bottom:?}"
@@ -456,80 +493,76 @@ mod tests {
         // centre one: u = (4 + du) / 9 and v = (4 + dv) / 9 put the sample in
         // [-1/9, 1/9) on both axes, so x^2 + y^2 <= 2/81, well inside the
         // 1/3 the ball subtends, and it wins the list over the ground 100
-        // units below it. With the eye at the origin and the ball at
-        // (0, 0, -1) r = 0.5: oc = (0, 0, 1), half_b = oc . d = -1 and
-        // c = oc . oc - 1/4 = 3/4, so the near root is
-        //   t = (1 - sqrt(1 - 3a / 4)) / a,  a = d . d
-        // and the outward normal, (t d - (0, 0, -1)) / 0.5, is
-        //   (2 t x, 2 t y, 2 (1 - t)).
-        // The ray meets it head on, since d . outward = 2 (t a - 1) = -2 sqrt(1
-        // - 3a / 4), which is negative.
-        let centre = sample_ray(&camera, SEED, 4, 4, 0).direction;
-        let a = centre.dot(centre);
-        let t = (1.0 - (1.0 - 0.75 * a).sqrt()) / a;
-        assert_vec_close(
-            Vec3::from_rgb(image.pixels[4 * width + 4]),
-            shade(Vec3::new(
-                2.0 * t * centre.x,
-                2.0 * t * centre.y,
-                2.0 * (1.0 - t),
-            )),
+        // units below it.
+        //
+        // Every pixel is a chain of albedos closing on the sky, and the sky
+        // terminates at (1 - 0.5a, 1 - 0.3a, 1) for a = 0.5 * (unit.y + 1) in
+        // [0, 1], so the terminal ratio is (5/7) <= r/g <= 1. Multiplying that
+        // by the per-bounce ratios pins the channels:
+        //   red / green = (7/3)^m * (terminal r / terminal g), m ball bounces
+        //   green / blue = terminal g / terminal b  in (0, 1]
+        // The ground's (0.5, 0.5, 0.5) contributes 1 to both and the ball's
+        // (0.7, 0.3, 0.3) contributes 7/3 and 1. So green never leads blue,
+        // and red leads green exactly when the chain touched the ball:
+        // m = 0 gives at most 1, m >= 1 gives at least (7/3)(5/7) = 5/3.
+        let ball = image.pixels[4 * width + 4];
+        assert!(
+            ball[0] > ball[1] && ball[1] <= ball[2],
+            "the centre pixel should be the red ball, got {ball:?}"
         );
 
         // Rows 0 to 4 are all sky, whatever the draw. Along the left edge
         // u = du / 9 puts x in [-1, -7/9), so the ball's x^2 + y^2 <= 1/3 is
-        // out of reach, and the ground -- hit only when its smaller root is
-        // ahead of the eye, i.e. when y <= the silhouette -- tops out at
-        // y = -0.1174 here, below row 4's y in [-1/9, 1/9). Every sky pixel
-        // has blue at exactly 1.0, because `sky_color` returns (1 - a) + a.
+        // out of reach, and the ground's quadratic has both roots behind the
+        // eye unless 100.5 y - 1 < 0; rows 0 to 4 have y in [-1/9, 1), and at
+        // the widest the discriminant 9999 y^2 - 201 y - 100.25 - 101.25 x^2
+        // peaks at y = -1/9 with -15.72, so it is negative throughout. Every
+        // sky pixel has blue at exactly 1.0, because `sky_color` returns
+        // (1 - a) + a.
         for row in 0..=4 {
-            assert_eq!(
-                image.pixels[row * width][2],
-                1.0,
-                "row {row} should be sky, got {:?}",
-                image.pixels[row * width]
+            let got = image.pixels[row * width];
+            assert_eq!(got[2], 1.0, "row {row} should be sky, got {got:?}");
+            assert!(
+                got[0] <= got[1] && got[1] <= got[2],
+                "sky is blue-leading, got {got:?}"
             );
         }
 
         // Rows 6 to 8 are all ground: their y runs from -1/3 down to -1, clear
-        // of the silhouette, and they miss the ball on x. The ground's normal
-        // is nearly (0, 1, 0), so blue is 0.5 + n.z / 2 and green is 0.5 * n.y
-        // + 0.5, with n.y never dropping below 0.99994 -- the gap between that
-        // green and the sky's 0.85 is what keeps the two apart.
+        // of the silhouette, and they miss the ball on x. The ground's albedo
+        // is a neutral 0.5, so every channel is the rest of the bounce chain
+        // scaled by 0.5; no albedo in the scene exceeds 0.7 and the sky caps at
+        // 1.0, so no channel can reach the sky's 1.0. Under §8's `shade` these
+        // pixels had green above 0.999, so this is the assertion that fails if
+        // the material is dropped. Green never leads blue for any pixel,
+        // whichever surfaces the chain touched.
         for row in 6..=8 {
             let got = image.pixels[row * width];
-            assert!(got[2] < 0.75, "row {row} should be ground, got {got:?}");
-            assert!(
-                got[1] > 0.999,
-                "row {row} should be near-vertical ground, got {got:?}"
-            );
+            for (channel, value) in got.iter().enumerate() {
+                assert!(
+                    *value > 0.0 && *value <= 0.5,
+                    "row {row} channel {channel} should be in (0, 0.5], got {value} in {got:?}"
+                );
+            }
+            assert!(got[1] <= got[2], "green never leads blue, got {got:?}");
         }
 
         // Row 5 is the one row the jitter can push either side of the
         // silhouette: j = 3 puts v anywhere in [1/3, 4/9), so y runs from -1/3
         // up to -1/9, and that band straddles the ground's edge between
-        // -0.1323 at x = -1 and -0.1174 at x = -7/9. So it is checked against
-        // its own draw. The ground quadratic is the same one as in
-        // `sky_is_above_and_ground_below`; the ball is missed on x.
-        let j = 3;
-        let n = first_draw(&camera, 0, j);
-        let direction = Vec3::new(
-            -1.0 + 2.0 * draw(SEED, n) / 9.0,
-            -1.0 + 2.0 * (j as f64 + draw(SEED, n + 1)) / 9.0,
-            -1.0,
+        // -0.1323 at x = -1 and -0.1174 at x = -7/9. So it is either sky, which
+        // pins blue at exactly 1.0, or ground, which caps it at 0.5. That is
+        // all this row can say on its own; the row mirror is pinned by rows 0
+        // to 4 pinning blue to 1.0 above and rows 6 to 8 capping it at 0.5
+        // below, which a dropped mirror would invert.
+        let middle = image.pixels[5 * width];
+        assert!(
+            middle[2] == 1.0 || middle[2] <= 0.5,
+            "row 5 is sky or ground, got {middle:?}"
         );
-        let center = Vec3::new(0.0, -100.5, -1.0);
-        let oc = Vec3::ZERO - center;
-        let a = direction.dot(direction);
-        let half_b = oc.dot(direction);
-        let c = oc.dot(oc) - 100.0 * 100.0;
-        let discriminant = half_b * half_b - a * c;
-        let expected = if discriminant < 0.0 {
-            sky_color(direction)
-        } else {
-            let t = (-half_b - discriminant.sqrt()) / a;
-            shade((direction * t - center) / 100.0)
-        };
-        assert_vec_close(Vec3::from_rgb(image.pixels[5 * width]), expected);
+        assert!(
+            middle.iter().all(|c| c.is_finite()),
+            "row 5 should stay finite, got {middle:?}"
+        );
     }
 }

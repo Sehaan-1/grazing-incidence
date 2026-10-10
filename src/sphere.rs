@@ -1,6 +1,7 @@
 //! Spheres.
 
 use crate::hittable::{HitRecord, Hittable};
+use crate::material::Material;
 use crate::ray::Ray;
 use crate::vec3::Vec3;
 
@@ -8,11 +9,16 @@ use crate::vec3::Vec3;
 pub struct Sphere {
     pub center: Vec3,
     pub radius: f64,
+    pub material: Material,
 }
 
 impl Sphere {
-    pub const fn new(center: Vec3, radius: f64) -> Self {
-        Self { center, radius }
+    pub const fn new(center: Vec3, radius: f64, material: Material) -> Self {
+        Self {
+            center,
+            radius,
+            material,
+        }
     }
 }
 
@@ -51,6 +57,7 @@ impl Hittable for Sphere {
             point,
             normal,
             front_face,
+            material: self.material,
         })
     }
 }
@@ -58,6 +65,7 @@ impl Hittable for Sphere {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::material::Material;
 
     fn close(a: f64, b: f64) {
         assert!((a - b).abs() < 1e-9, "expected {b}, got {a}");
@@ -65,28 +73,28 @@ mod tests {
 
     #[test]
     fn hits_the_book_example_exactly() {
-        let sphere = Sphere::new(Vec3::ZERO, 0.5);
+        let sphere = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
         assert_eq!(sphere.hit(&ray, 0.001, f64::INFINITY).unwrap().t, 10.5);
     }
 
     #[test]
     fn misses_when_aimed_away() {
-        let sphere = Sphere::new(Vec3::ZERO, 0.5);
+        let sphere = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0));
         assert!(sphere.hit(&ray, 0.001, f64::INFINITY).is_none());
     }
 
     #[test]
     fn misses_when_offset_beyond_the_radius() {
-        let sphere = Sphere::new(Vec3::ZERO, 0.5);
+        let sphere = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::new(-11.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
         assert!(sphere.hit(&ray, 0.001, f64::INFINITY).is_none());
     }
 
     #[test]
     fn respects_t_max() {
-        let sphere = Sphere::new(Vec3::ZERO, 0.5);
+        let sphere = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
         // Roots are 10.5 and 11.5. A t_max below both rejects the near root and
         // the far root is beyond t_max too, so the whole hit is rejected.
@@ -97,14 +105,14 @@ mod tests {
 
     #[test]
     fn ray_starting_inside_hits_the_far_side() {
-        let sphere = Sphere::new(Vec3::ZERO, 5.0);
+        let sphere = Sphere::new(Vec3::ZERO, 5.0, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0));
         close(sphere.hit(&ray, 0.001, f64::INFINITY).unwrap().t, 5.0);
     }
 
     #[test]
     fn hit_point_lies_on_the_surface() {
-        let sphere = Sphere::new(Vec3::ZERO, 0.5);
+        let sphere = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
         let rec = sphere.hit(&ray, 0.001, f64::INFINITY).unwrap();
         close(ray.at(rec.t).length(), sphere.radius);
@@ -113,7 +121,11 @@ mod tests {
     #[test]
     fn half_b_form_agrees_with_the_books_full_quadratic() {
         // The book's own worked numbers through both formulations.
-        let sphere = Sphere::new(Vec3::new(0.0, 0.0, -1.0), 0.5);
+        let sphere = Sphere::new(
+            Vec3::new(0.0, 0.0, -1.0),
+            0.5,
+            Material::lambertian(Vec3::UNIT),
+        );
         let ray = Ray::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
 
         let oc = ray.origin - sphere.center;
@@ -126,5 +138,17 @@ mod tests {
         close(b * b - 4.0 * a * c, 4.0 * (half_b * half_b - a * c));
 
         close(sphere.hit(&ray, 0.001, f64::INFINITY).unwrap().t, 0.5);
+    }
+
+    /// The record has to report the sphere's own material, not a default one,
+    /// or §9 would shade every surface the same.
+    #[test]
+    fn hit_reports_the_sphere_material() {
+        let material = Material::lambertian(Vec3::new(0.7, 0.3, 0.3));
+        let sphere = Sphere::new(Vec3::ZERO, 0.5, material);
+        let ray = Ray::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
+        let rec = sphere.hit(&ray, 0.001, f64::INFINITY).unwrap();
+        assert_eq!(rec.material, material);
+        assert_eq!(sphere.material, material);
     }
 }

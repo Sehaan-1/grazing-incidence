@@ -1,5 +1,6 @@
 //! The intersection abstraction.
 
+use crate::material::Material;
 use crate::ray::Ray;
 use crate::vec3::Vec3;
 
@@ -10,6 +11,7 @@ pub struct HitRecord {
     pub point: Vec3,
     pub normal: Vec3,
     pub front_face: bool,
+    pub material: Material,
 }
 
 /// Anything a ray can intersect (§6.3).
@@ -53,6 +55,7 @@ impl Hittable for HittableList<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::material::Material;
     use crate::sphere::Sphere;
 
     #[test]
@@ -64,8 +67,12 @@ mod tests {
 
     #[test]
     fn list_returns_the_closest_of_two() {
-        let far = Sphere::new(Vec3::ZERO, 0.5);
-        let near = Sphere::new(Vec3::new(-5.0, 0.0, 0.0), 0.5);
+        let far = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
+        let near = Sphere::new(
+            Vec3::new(-5.0, 0.0, 0.0),
+            0.5,
+            Material::lambertian(Vec3::UNIT),
+        );
         let mut world = HittableList::new();
         world.add(&far);
         world.add(&near);
@@ -76,8 +83,35 @@ mod tests {
     }
 
     #[test]
+    fn the_record_carries_the_material_of_the_sphere_it_hit() {
+        // The two spheres differ only in albedo, so `t` alone cannot tell them
+        // apart. `list_returns_the_closest_of_two` proves the near sphere wins;
+        // this proves the record reports the near sphere's material rather than
+        // whichever happened to be added last.
+        let far = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
+        let near = Sphere::new(
+            Vec3::new(-5.0, 0.0, 0.0),
+            0.5,
+            Material::lambertian(Vec3::new(0.7, 0.3, 0.3)),
+        );
+        let mut world = HittableList::new();
+        world.add(&far);
+        world.add(&near);
+
+        let ray = Ray::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
+        let rec = world.hit(&ray, 0.001, f64::INFINITY).unwrap();
+        assert_eq!(rec.t, 5.5);
+        assert_eq!(
+            rec.material,
+            Material::Lambertian {
+                albedo: Vec3::new(0.7, 0.3, 0.3)
+            }
+        );
+    }
+
+    #[test]
     fn front_face_is_true_when_the_ray_faces_the_normal() {
-        let sphere = Sphere::new(Vec3::ZERO, 0.5);
+        let sphere = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
         let rec = sphere.hit(&ray, 0.001, f64::INFINITY).unwrap();
         assert!(rec.front_face);
@@ -87,7 +121,7 @@ mod tests {
 
     #[test]
     fn back_face_normal_flips_and_front_face_is_false() {
-        let sphere = Sphere::new(Vec3::ZERO, 0.5);
+        let sphere = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0));
         let rec = sphere.hit(&ray, 0.001, f64::INFINITY).unwrap();
         assert!(!rec.front_face);
@@ -97,7 +131,11 @@ mod tests {
 
     #[test]
     fn hit_point_matches_the_ray_parameter() {
-        let sphere = Sphere::new(Vec3::new(0.0, 0.0, -1.0), 0.5);
+        let sphere = Sphere::new(
+            Vec3::new(0.0, 0.0, -1.0),
+            0.5,
+            Material::lambertian(Vec3::UNIT),
+        );
         let ray = Ray::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
         let rec = sphere.hit(&ray, 0.001, f64::INFINITY).unwrap();
         assert_eq!(rec.point, ray.at(rec.t));
