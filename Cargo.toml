@@ -1,0 +1,15 @@
+[package]
+name = "grazing-incidence"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A ray tracer built by porting Ray Tracing in One Weekend to Rust"
+license = "MIT"
+
+[dependencies]
+# Intentionally empty. See docs/superpowers/specs/ for the rationale.
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
