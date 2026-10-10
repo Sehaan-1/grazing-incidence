@@ -1157,8 +1157,7 @@ fn render_sphere(width: usize, height: usize) -> Result<Image, RenderError> {
             let color = match sphere.hit(&ray, 0.001, f64::INFINITY) {
                 Some(t) => {
                     let normal = (ray.at(t) - sphere.center).unit();
-                    Vec3::new(1.0, 0.2, 0.2)
-                        * (0.5 * (normal.dot(Vec3::new(0.0, 0.0, -1.0)) + 1.0))
+                    normal * 0.5 + Vec3::UNIT * 0.5
                 }
                 None => sky_color(ray.direction),
             };
@@ -1594,7 +1593,7 @@ fn sky_color(direction: Vec3) -> Vec3 {
 
 /// Shade a hit by how much it faces the camera (§6.1).
 fn shade(normal: Vec3) -> Vec3 {
-    Vec3::new(0.2, 0.3, 0.5) * (0.5 * (normal.dot(Vec3::new(0.0, 0.0, -1.0)) + 1.0))
+    normal * 0.5 + Vec3::UNIT * 0.5
 }
 
 pub fn render_scene(width: usize, height: usize) -> Result<Image, RenderError> {
