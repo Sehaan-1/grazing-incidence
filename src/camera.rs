@@ -107,9 +107,10 @@ fn sky_color(direction: Vec3) -> Vec3 {
     Vec3::UNIT * (1.0 - a) + Vec3::new(0.5, 0.7, 1.0) * a
 }
 
-/// Shade a hit by how much it faces the camera (§6.1).
+/// The book's normal colour map: each normal component maps from [-1, 1] to
+/// [0, 1] (§6.1, unchanged through §7).
 fn shade(normal: Vec3) -> Vec3 {
-    Vec3::new(0.2, 0.3, 0.5) * (0.5 * (normal.dot(Vec3::new(0.0, 0.0, -1.0)) + 1.0))
+    normal * 0.5 + Vec3::UNIT * 0.5
 }
 
 #[cfg(test)]
@@ -251,19 +252,45 @@ mod tests {
         // The bottom row looks down and hits the ground. Direction (-1,-1,-1)
         // against (0,-100.5,-1) r = 100 gives a = 3, half_b = -101.5 and
         // c = 101.25, so t = (101.5 - sqrt(9998.5)) / 3. The outward normal
-        // there has z = (1 - t) / 100, and `shade` scales by 0.5 * (1 - n.z).
+        // there is (t*(-1,-1,-1) - (0,-100.5,-1)) / 100, and the ray meets it
+        // head on (d . outward = -0.999925 < 0), so the hit normal is:
+        //   n.x = -t / 100,  n.y = (100.5 - t) / 100,  n.z = (1 - t) / 100
+        // `shade` is 0.5 * n + 0.5, so each channel carries its own constant
+        // plus the same -t / 200:
+        //   0.5 * (-t / 100)       + 0.5 = 0.5     - t / 200
+        //   0.5 * ((100.5 - t)/100) + 0.5 = 1.0025 - t / 200
+        //   0.5 * ((1 - t) / 100)  + 0.5 = 0.505  - t / 200
+        // t = 0.50250009 gives (0.4974875, 0.9999875, 0.5024875).
         let (a, half_b, c): (f64, f64, f64) = (3.0, -101.5, 101.25);
         let t = (-half_b - (half_b * half_b - a * c).sqrt()) / a;
-        let k = 0.5 * (1.0 - (1.0 - t) / 100.0);
-        assert_vec_close(Vec3::from_rgb(bottom), Vec3::new(0.2, 0.3, 0.5) * k);
+        let k = t / 200.0;
+        assert_vec_close(
+            Vec3::from_rgb(bottom),
+            Vec3::new(0.5 - k, 1.0025 - k, 0.505 - k),
+        );
 
-        // Blue is the channel that tells the two apart: the sky pins it at 1.0
-        // while `shade` holds it under 0.5. Drop `let row = image_height - 1 - j;`
-        // and these two rows swap, so this comparison is what turns round.
+        // Blue is the channel that tells the two apart: the sky pins it at
+        // exactly 1.0, while the ground's is 0.5 + n.z / 2 and its normal points
+        // nearly straight up, so it lands near 0.5 (0.5024875 here). Drop
+        // `let row = image_height - 1 - j;` and these two rows swap, so this
+        // comparison is what turns round.
         assert!(
             top[2] > bottom[2],
             "sky should sit above ground, got top {top:?} and bottom {bottom:?}"
         );
+    }
+
+    #[test]
+    fn the_normal_colour_map_sends_plus_y_to_pale_green_and_minus_y_to_magenta() {
+        // 0.5 * n + 0.5: +y -> (0, 0.5, 0) + (0.5, 0.5, 0.5) = (0.5, 1.0, 0.5),
+        // -y -> (0, -0.5, 0) + (0.5, 0.5, 0.5) = (0.5, 0.0, 0.5).
+        assert_vec_close(shade(Vec3::new(0.0, 1.0, 0.0)), Vec3::new(0.5, 1.0, 0.5));
+        assert_vec_close(shade(Vec3::new(0.0, -1.0, 0.0)), Vec3::new(0.5, 0.0, 0.5));
+
+        // A unit normal has every component at an endpoint of [-1, 1], so the
+        // map sends it to white, and the zero normal to the midpoint grey.
+        assert_vec_close(shade(Vec3::UNIT), Vec3::UNIT);
+        assert_vec_close(shade(Vec3::ZERO), Vec3::new(0.5, 0.5, 0.5));
     }
 
     #[test]
@@ -287,19 +314,24 @@ mod tests {
         );
 
         // The ball's silhouette cuts into that horizon row: the centre ray
-        // (0, 0, -1) meets it head on at t = 1 - 0.5 = 0.5, where the outward
-        // normal is (0, 0, 1). That faces away from the camera, so `shade`
-        // returns 0.5 * (1 - 1) = 0 and the pixel is black. The old geometry had
-        // the eye on the ball's surface, so nothing could be drawn here.
-        assert_eq!(image.pixels[4 * width + 4], [0.0, 0.0, 0.0]);
+        // (0, 0, -1) meets it head on at t = 1 - 0.5 = 0.5, at the point
+        // (0, 0, -0.5), whose outward normal is (0, 0, 1). The ray meets that
+        // head on too (d . outward = -1 < 0), so the hit normal is (0, 0, 1),
+        // and `shade` gives 0.5 * (0, 0, 1) + 0.5 * (1, 1, 1) = (0.5, 0.5, 1.0):
+        // red and green sit at the midpoint because those normal components are
+        // 0, and blue is pinned at 1.0 because n.z = +1. The old geometry had the
+        // eye on the ball's surface, so nothing could be drawn here.
+        assert_eq!(image.pixels[4 * width + 4], [0.5, 0.5, 1.0]);
 
         // Along the left edge the horizon lands between rows 4 and 5: every row
         // above it tilts up and misses both spheres, so its blue is the sky's
         // exact 1.0; every row below tilts down into the ground, whose blue is
-        // `0.5 * (1 - n.z)`. The outward normal's z stays inside 0.0112 of zero
-        // there (row 5 is the worst, at n.z = -0.011136), so blue never climbs
-        // past 0.2528. The gap between 0.2528 and 1.0 is what makes 0.5 a safe
-        // discriminator for sky against ground.
+        // 0.5 + n.z / 2. The ground's normal is nearly (0, 1, 0) everywhere, so
+        // that blue sits near 0.5 -- by hand, from the quadratic at each row's
+        // dy = 1 - row/4: 0.494429 (row 5), 0.499949, 0.501648, 0.502487
+        // (row 8). The gap between 0.502487 and the sky's 1.0 is what makes
+        // 0.75 a safe discriminator for sky against ground; the old `shade`'s
+        // "under 0.5" no longer holds, since row 8 lands just above it.
         for row in 0..=4 {
             assert_eq!(
                 image.pixels[row * width][2],
@@ -310,7 +342,14 @@ mod tests {
         }
         for row in 5..=8 {
             let got = image.pixels[row * width];
-            assert!(got[2] < 0.5, "row {row} should be ground, got {got:?}");
+            assert!(got[2] < 0.75, "row {row} should be ground, got {got:?}");
+
+            // The same pale ground everywhere: green is 0.5 * n.y + 0.5, and
+            // n.y never drops below 0.99971, so it never falls under 0.9998.
+            assert!(
+                got[1] > 0.999,
+                "row {row} should be near-vertical ground, got {got:?}"
+            );
         }
     }
 }
