@@ -22,6 +22,8 @@ Identical to Plan A, and equally binding:
 - **Float comparisons** use an epsilon. Exact `==` only where exactly representable.
 - **Zero warnings.** No `#[allow(dead_code)]`.
 - **Commit gate.** `cargo build` clean, `cargo test` green, image rendered, then commit.
+- **Test counts.** Step verification says "all tests pass", not a cumulative number. Earlier drafts of this plan asserted cumulative counts and they were wrong. If a step names a count, treat it as a hint, not a gate — never write an extra test to make a number come out.
+- **Verifying RED in Rust.** Rust does not compile a file in `src/` that no `mod` statement references. Creating a module and its tests before declaring it in `lib.rs` gives a *successful build with zero tests collected*, not a compile failure. To verify a test has teeth, use a **mutation check**: temporarily break the implementation in a way the test should catch, confirm it fails, then revert. Report which mutation you used and what it proved.
 - **Commit message** cites the book section.
 - **Do not touch `docs/superpowers/specs/`.**
 - **`Image` stores `Vec<[f64; 3]>`.** Never store `Vec3` in the buffer.
@@ -201,7 +203,7 @@ pub mod rng;
 ```
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 56 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 3: Format and commit**
 
@@ -319,7 +321,7 @@ mod tests {
 - [ ] **Step 4: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 57 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 5: Format, render, and commit**
 
@@ -635,7 +637,7 @@ pub const GAMMA: bool = true;
 - [ ] **Step 7: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 62 tests PASS, no warnings.
+Expected: all tests pass, zero warnings.
 
 - [ ] **Step 8: Format, render, and commit**
 
@@ -796,7 +798,7 @@ Keep the ground Lambertian so the contrast is visible.
 - [ ] **Step 4: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 66 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 5: Format, render, and commit**
 
@@ -1014,7 +1016,7 @@ Update the `spheres_scene_contains_two_objects` test in `scene.rs` to assert 4, 
 - [ ] **Step 4: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 72 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 5: Format, render, and commit**
 
@@ -1663,7 +1665,7 @@ and add `| Self::UnsupportedFormat { .. } => None,` to `source`.
 - [ ] **Step 6: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: all tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 7: Format, render, and commit**
 
@@ -1909,7 +1911,7 @@ In `src/renderer.rs`:
 - [ ] **Step 8: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: all tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 9: Format, render, and commit**
 
@@ -2768,7 +2770,7 @@ no change beyond what Step 3 writes.
 - [ ] **Step 4: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: all tests PASS. The `different_seeds_produce_different_images` test may now be slow — if it exceeds a minute, drop `samples_per_pixel` to 4 in that test only.
+Expected: all tests pass. The `different_seeds_produce_different_images` test may now be slow — if it exceeds a minute, drop `samples_per_pixel` to 4 in that test only.
 
 - [ ] **Step 5: Render the fast image, then the cover**
 

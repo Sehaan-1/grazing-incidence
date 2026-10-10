@@ -22,6 +22,8 @@ These apply to every task. Read them before starting.
 - **Float comparisons** use an explicit epsilon helper `assert_close(a, b, eps)` or a local `close(a, b)` fn. Exact `==` is used only where the value is exactly representable (e.g. `t == 10.5`).
 - **Zero warnings.** `cargo build` and `cargo test` must produce no warnings. No `#[allow(dead_code)]`.
 - **Commit gate.** Every task ends with: `cargo build` clean, `cargo test` green, image rendered to `images/`, `git commit`. Do not commit a task whose tests fail.
+- **Test counts.** Step verification says "all tests pass", not a cumulative number. The earlier drafts of this plan asserted cumulative counts and they were wrong. If a step names a count, treat it as a hint, not a gate — never write an extra test to make a number come out.
+- **Verifying RED in Rust.** Rust does not compile a file in `src/` that no `mod` statement references. So creating a module and its tests before declaring it in `lib.rs` produces a *successful build with zero tests collected* — not a compile failure. There is no red phase in the "it won't compile" sense. To actually verify a test has teeth, use a **mutation check**: temporarily break the implementation in a way the test should catch, confirm the test fails, then revert. Say in your report which mutation you used and what it proved.
 - **Commit message** cites the book section, e.g. `feat(ch05): ray-sphere intersection (Ray Tracing in One Weekend §5)`.
 - **Do not touch `docs/superpowers/specs/`.** It is the approved design; this plan implements it.
 - **`Image` stores pixels as `Vec<[f64; 3]>`**, never `Vec3`. `vec3` does not exist at chapter 2, and keeping the buffer type fixed means `image.rs` is never rewritten. Convert with `Vec3::to_rgb` / `Vec3::from_rgb` at the boundary.
@@ -255,7 +257,9 @@ mod tests {
 ```
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: FAIL — `cannot find module` errors, since `lib.rs` does not declare them yet.
+Expected: the modules are not yet declared in `lib.rs`, so cargo builds them zero times and reports zero tests collected. That is expected — Rust does not compile a file no `mod` statement references.
+
+To prove these tests actually have teeth before moving on, run a **mutation check**: temporarily break `Image::new`'s zero-dimension guard and `write_ppm`'s gamma branch, confirm the four tests that cover them fail, then revert. Record the mutation and its result as your RED evidence.
 
 - [ ] **Step 2: Write `src/lib.rs`**
 
@@ -474,7 +478,7 @@ Remove-Item src/scene.rs
 ```
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 14 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 7: Format**
 
@@ -482,7 +486,7 @@ Expected: 14 tests PASS.
 cargo fmt
 cargo test
 ```
-Expected: 14 tests PASS, no warnings.
+Expected: all tests pass, zero warnings.
 
 - [ ] **Step 8: Render and commit**
 
@@ -839,7 +843,7 @@ pub mod vec3;
 ```
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 29 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 3: Format and commit**
 
@@ -969,7 +973,7 @@ pub mod ray;
 ```
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 32 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 4: Format, render, and commit**
 
@@ -1165,7 +1169,7 @@ Add `use crate::sphere::Sphere;` to `src/renderer.rs`.
 - [ ] **Step 3: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 38 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 4: Format, render, and commit**
 
@@ -1625,7 +1629,7 @@ pub fn render_scene(width: usize, height: usize) -> Result<Image, RenderError> {
 - [ ] **Step 6: Test**
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 47 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 7: Format, render, and commit**
 
@@ -1827,7 +1831,7 @@ pub mod camera;
 ```
 
 Run: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; cargo test`
-Expected: 49 tests PASS.
+Expected: all tests pass.
 
 - [ ] **Step 4: Verify the render is unchanged from Task 5**
 
