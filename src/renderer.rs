@@ -47,7 +47,12 @@ fn render_sphere(width: usize, height: usize) -> Result<Image, RenderError> {
                 }
                 None => sky_color(ray.direction),
             };
-            image.set(i, j, color.to_rgb());
+            // The book's chapter 4-6 camera anchors on the bottom-left corner and
+            // counts j upward, putting the bottom of the viewport in the image's
+            // top row. Mirror the write index so every image is the right way
+            // up, as chapter 7's camera onward produces naturally.
+            let row = height - 1 - j;
+            image.set(i, row, color.to_rgb());
         }
     }
     eprintln!("\rDone.                 ");
@@ -141,5 +146,44 @@ mod tests {
         // (width - 1) and (height - 1) are 1 at this size, so every channel is
         // finite rather than NaN.
         assert!(image.pixels.iter().flatten().all(|c| c.is_finite()));
+    }
+
+    #[test]
+    fn image_is_the_right_way_up_blue_above_white() {
+        let image = render_scene(8, 8).unwrap();
+        let width = image.width;
+
+        // Row-major, top row first: [0] is the top-left pixel, [7 * width] the
+        // bottom-left one.
+        let top = image.pixels[0];
+        let bottom = image.pixels[7 * width];
+
+        // Both corners are pure sky, not the sphere. The sphere at (0, 0, -1)
+        // with radius 0.5 subtends asin(0.5) = 30 degrees from the origin, and
+        // a corner ray is (-1, +/-1, -1), which is 54.7 degrees off the centre
+        // axis. Those corner directions are exactly what the camera builds for
+        // u = 0 at v = 1 and v = 0.
+        //
+        // Which row each lands in is the whole claim, so anchor them: the top of
+        // the frame must be the ray looking up (+y, the blue tint) and the bottom
+        // the ray looking down (-y, white). A mirrored render swaps the two.
+        for (got, expected) in [
+            (top, sky_color(Vec3::new(-1.0, 1.0, -1.0)).to_rgb()),
+            (bottom, sky_color(Vec3::new(-1.0, -1.0, -1.0)).to_rgb()),
+        ] {
+            close(got[0], expected[0]);
+            close(got[1], expected[1]);
+            close(got[2], expected[2]);
+        }
+
+        // "How blue?" has to be read off red, never blue: sky_color pins blue at
+        // 1.0 for both the white and the tint, so blue never discriminates.
+        // Red is the channel that moves -- 1.0 - 0.5 * a -- and a rises as the
+        // ray tilts up. The top row is therefore red-poor and the bottom nearly
+        // white.
+        assert!(
+            top[0] < bottom[0],
+            "top row should be the red-poor sky, got top {top:?} and bottom {bottom:?}"
+        );
     }
 }
