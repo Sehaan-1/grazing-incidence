@@ -15,7 +15,7 @@ impl fmt::Display for RenderError {
         match self {
             Self::InvalidDimension { width, height } => write!(
                 f,
-                "invalid image dimensions {width}x{height}: both must be non-zero"
+                "invalid image dimensions {width}x{height}: both must be at least 2"
             ),
             Self::MissingValue { flag } => write!(f, "{flag} requires a value"),
             Self::InvalidParameter { flag, value } => {
