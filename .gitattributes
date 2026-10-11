@@ -1,4 +1,4 @@
-# Normalize line endings so chapter diffs stay clean across platforms.
+# Normalize line endings so diffs stay clean across platforms.
 * text=auto eol=lf
 
 # Binary renders must never be line-ending translated.

@@ -4,7 +4,7 @@ use crate::material::Material;
 use crate::ray::Ray;
 use crate::vec3::Vec3;
 
-/// Everything known about one ray-surface intersection (§6.3).
+/// Everything known about one ray-surface intersection.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitRecord {
     pub t: f64,
@@ -14,12 +14,12 @@ pub struct HitRecord {
     pub material: Material,
 }
 
-/// Anything a ray can intersect (§6.3).
+/// Anything a ray can intersect.
 pub trait Hittable {
     fn hit(&self, ray: &Ray, t_min: f64, t_max: f64) -> Option<HitRecord>;
 }
 
-/// An ordered set of hittables; the closest hit wins (§6.5).
+/// An ordered set of hittables; the closest hit wins.
 #[derive(Default)]
 pub struct HittableList<'a> {
     objects: Vec<&'a dyn Hittable>,

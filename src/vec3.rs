@@ -48,12 +48,12 @@ impl Vec3 {
         self.length_squared().sqrt()
     }
 
-    /// Scale to unit length. A zero vector yields NaN, as in the book.
+    /// Scale to unit length. A zero vector yields NaN.
     pub fn unit(self) -> Self {
         self / self.length()
     }
 
-    /// True when every component is within `1e-8` of zero (§10).
+    /// True when every component is within `1e-8` of zero.
     pub fn near_zero(self) -> bool {
         let s = 1e-8;
         self.x.abs() < s && self.y.abs() < s && self.z.abs() < s
@@ -81,12 +81,12 @@ impl Vec3 {
 /// putting them in the `impl Vec3` block above would make them `Vec3::random`
 /// and lose the colour reading at the call site.
 impl Color {
-    /// A uniformly random colour with each component in `[0, 1)` (§10).
+    /// A uniformly random colour with each component in `[0, 1)`.
     pub fn random(rng: &mut crate::rng::Rng) -> Self {
         Self::new(rng.f64(), rng.f64(), rng.f64())
     }
 
-    /// A uniformly random colour with each component in `[min, max)` (§10).
+    /// A uniformly random colour with each component in `[min, max)`.
     pub fn random_range(rng: &mut crate::rng::Rng, min: f64, max: f64) -> Self {
         Self::new(
             rng.range(min, max),
@@ -96,13 +96,13 @@ impl Color {
     }
 }
 
-/// Reflect `v` about a unit normal `n` (§10).
+/// Reflect `v` about a unit normal `n`.
 pub fn reflect(v: Vec3, n: Vec3) -> Vec3 {
     v - 2.0 * v.dot(n) * n
 }
 
 /// Refract `uv` (unit length, pointing toward the surface) through normal `n`
-/// into a medium whose index ratio is `eta_ratio` (§11).
+/// into a medium whose index ratio is `eta_ratio`.
 pub fn refract(uv: Vec3, n: Vec3, eta_ratio: f64) -> Vec3 {
     let cos_theta = (-uv).dot(n).min(1.0);
     let r_out_perp = eta_ratio * (uv + cos_theta * n);
@@ -398,8 +398,8 @@ mod tests {
         assert!(t.x.is_finite() && t.y.is_finite() && t.z.is_finite());
 
         // eta * sin(theta_i) = 1.4999 > 1, so this is past the critical angle and
-        // there is no refracted ray: the sqrt argument goes negative. The book's
-        // formula has no total-internal-reflection case, and `refract` keeps the
+        // there is no refracted ray: the sqrt argument goes negative. The formula
+        // has no total-internal-reflection case, and `refract` keeps the
         // result finite by taking the absolute value of that argument. The
         // magnitude that falls out is therefore sqrt(2q - 1) for q = |r_out_perp|^2,
         // not 1 — a unit-length refracted ray does not exist here.

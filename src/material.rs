@@ -18,28 +18,28 @@ impl Material {
     }
 
     /// A polished metal. `fuzz` is the blur radius in world units, clamped to
-    /// `[0, 1]` on every scatter (§10).
+    /// `[0, 1]` on every scatter.
     pub fn metal(albedo: Color, fuzz: f64) -> Self {
         Self::Metal { albedo, fuzz }
     }
 
     /// Glass and every other transparent medium. `ior` is the index of
-    /// refraction relative to the surrounding medium (§11).
+    /// refraction relative to the surrounding medium.
     pub fn dielectric(ior: f64) -> Self {
         Self::Dielectric { ior }
     }
 
-    /// Choose a scattered ray and its attenuation (§9, §10). `None` absorbs the
+    /// Choose a scattered ray and its attenuation. `None` absorbs the
     /// ray.
     ///
-    /// The book's `lambertian` hands back only a ray; this returns the
-    /// attenuation alongside it so §10's metal can tint its reflection from
-    /// the same signature, without a breaking change. §10 also makes metal the
-    /// first material that reads the incoming ray, which is why the parameter is
-    /// named `ray` rather than `_ray`.
+    /// Lambertian scattering attenuates by its albedo alone, so it has nothing to
+    /// report but a ray. Returning the attenuation alongside it anyway lets metal
+    /// tint its reflection from the same signature, without a breaking change.
+    /// Metal is also the first material that reads the incoming ray, which is why
+    /// the parameter is named `ray` rather than `_ray`.
     pub fn scatter(&self, ray: &Ray, rec: &HitRecord, rng: &mut Rng) -> Option<(Ray, Color)> {
         match self {
-            // §9: normal + a random unit vector approximates the Lambertian
+            // Normal + a random unit vector approximates the Lambertian
             // distribution. The near_zero guard catches the case where the two
             // cancel exactly, which would otherwise yield a zero direction.
             Material::Lambertian { albedo } => {
@@ -49,7 +49,7 @@ impl Material {
                 }
                 Some((Ray::new(rec.point, direction), *albedo))
             }
-            // §10: mirror the ray about the normal, then blur it by `fuzz`.
+            // Mirror the ray about the normal, then blur it by `fuzz`.
             // A ray scattered below the surface is absorbed, which is what
             // gives metal surfaces their hard-edged look.
             Material::Metal { albedo, fuzz } => {
@@ -65,14 +65,14 @@ impl Material {
                     Some((scattered, *albedo))
                 }
             }
-            // §11: total internal reflection first, then Schlick's
+            // Total internal reflection first, then Schlick's
             // approximation to decide the reflect/refract split. `refract` is
             // module-level in `vec3` for the same reason `reflect` is.
             //
-            // The book keeps `ri` as the name for the *ratio*, and that name
-            // matters: entering the sphere means dividing by `ior`, leaving it
-            // means multiplying, and only the leaving case can go past the
-            // critical angle.
+            // The name `ri` denotes the *ratio*, not the material's index, and
+            // that distinction matters: entering the sphere means dividing by
+            // `ior`, leaving it means multiplying, and only the leaving case can
+            // go past the critical angle.
             Material::Dielectric { ior } => {
                 let refraction_ratio = if rec.front_face { 1.0 / ior } else { *ior };
 
@@ -99,12 +99,12 @@ impl Material {
     }
 }
 
-/// Schlick's approximation of the Fresnel reflectance (§11).
+/// Schlick's approximation of the Fresnel reflectance.
 ///
 /// `refraction_ratio` is Snell's `eta_ratio`, not a material's `ior`: the ratio
 /// of the two indices at the boundary, so `1 / ior` entering a sphere and
-/// `ior` leaving one. The book's parameter is called `refraction_index`, which
-/// reads like the material's index but is not -- at normal incidence this
+/// `ior` leaving one. The distinction is easy to miss, because the quantity
+/// reads like the material's index when it is not -- at normal incidence this
 /// returns `((1 - eta) / (1 + eta))^2`, and squaring makes that 0.04 for
 /// air/glass whether the ratio is `1/1.5` or `1.5`.
 fn reflectance(cosine: f64, refraction_ratio: f64) -> f64 {
@@ -314,7 +314,7 @@ mod tests {
         }
     }
 
-    /// Why the book clamps at all: no `fuzz` may drive a normal-incidence
+    /// Why `fuzz` is clamped at all: no `fuzz` may drive a normal-incidence
     /// reflection below the surface.
     ///
     /// A ray straight down reflects to straight up, so the scattered direction
@@ -597,7 +597,7 @@ mod tests {
             assert!((scattered.direction - expected).length() < 1e-9);
         }
 
-        // And the other side of the same boundary. The book compares strictly,
+        // And the other side of the same boundary. The comparison is strict,
         // so a ray sitting exactly on the critical angle -- where a refracted
         // ray exists but leaves along the surface -- still refracts.
         //
@@ -616,7 +616,7 @@ mod tests {
             1.0,
             "this direction is no longer exactly on the critical angle"
         );
-        assert!(!(1.5 * sin_theta > 1.0), "the book's `>` must be strict");
+        assert!(!(1.5 * sin_theta > 1.0), "the comparison must be strict");
 
         // At that angle `refract` returns exactly `(1, 0, 0)`: the
         // perpendicular term is `1.5 * (uv + cos_theta * n)` and the two y

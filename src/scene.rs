@@ -9,9 +9,9 @@ use crate::vec3::{Color, Vec3};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scene {
-    /// The ground sphere plus three balls (§6, §11).
+    /// The ground sphere plus three balls.
     Spheres,
-    /// The book's cover render: a field of random spheres (§14).
+    /// The cover render: a field of random spheres.
     Cover,
 }
 
@@ -34,9 +34,9 @@ impl Scene {
 /// Build the objects for a scene. Returns owned boxes so the caller can keep
 /// them alive while `HittableList` borrows them.
 ///
-/// `rng` seeds the cover scene's sphere placement (§14). Because the seed is
-/// fixed, the cover scene is reproducible like every other render; the §6
-/// scene draws nothing from it.
+/// `rng` seeds the cover scene's sphere placement. Because the seed is fixed,
+/// the cover scene is reproducible like every other render; the spheres scene
+/// draws nothing from it.
 pub fn build(scene: Scene, rng: &mut Rng) -> Vec<Box<dyn Hittable>> {
     match scene {
         Scene::Spheres => build_spheres(),
@@ -44,23 +44,21 @@ pub fn build(scene: Scene, rng: &mut Rng) -> Vec<Box<dyn Hittable>> {
     }
 }
 
-/// The book's §6 world, with §9's Lambertian ball, §10's metal ball and §11's
-/// glass ball and its hollow glass bubble sharing it. The ground sphere's top
-/// surface sits at -100.5 + 100 = -0.5, below the eye at the origin; an earlier
-/// ground at (0, -1000, 0) with r = 1000 put that surface exactly at y = 0, so
-/// the camera sat on it and no ray ever reached the sky.
+/// The spheres world: a Lambertian ground, a matte ball, a metal ball, a glass
+/// ball, and the hollow glass bubble sharing the glass ball's centre.
 ///
-/// This is the listing's *shape* with the listing's own ground moved down half a
-/// unit, and the two differences are both deliberate and both visible in the
-/// image:
+/// The ground sphere's top surface sits at -100.5 + 100 = -0.5, below the eye
+/// at the origin; an earlier ground at (0, -1000, 0) with r = 1000 put that
+/// surface exactly at y = 0, so the camera sat on it and no ray ever reached
+/// the sky. Two departures from the obvious arrangement are deliberate and both
+/// are visible in the image:
 ///
 ///   - the middle ball is at `(0, 0, -1.2)`, not `(0, 0, -1)`. Every other ball
 ///     sits at `z = -1`, so at `z = -1` the metal ball on the right lines up
-///     exactly behind the matte one and hides it. `§11`'s Listing 79 is where
-///     this first matters; the original §6 listing had no ball there at all.
+///     exactly behind the matte one and hides it.
 ///   - there is a second, *smaller* glass sphere concentric with the left one:
 ///     `(-1, 0, -1)` with `r = 0.4` and index `1.0 / 1.5`. It is a hollow
-///     bubble -- air inside glass inside air -- and it is the chapter's whole
+///     bubble -- air inside glass inside air -- and it is the scene's whole
 ///     point: rays refract twice on the way in (1 -> 0.667 -> 1) and twice on
 ///     the way back out, so the scene bends around it.
 ///
@@ -73,17 +71,18 @@ fn build_spheres() -> Vec<Box<dyn Hittable>> {
         100.0,
         Material::lambertian(Vec3::new(0.8, 0.8, 0.0)),
     );
-    // The book's order: ground, the matte ball, the left glass shell, the
-    // bubble inside it, and the metal ball on the right. Order does not matter
-    // -- `HittableList` takes the closest hit -- but matching the listing makes
-    // the five reads against the listing checkable line by line.
+    // Ground, the matte ball, the left glass shell, the bubble inside it, and the
+    // metal ball on the right. Order does not matter
+    // -- `HittableList` takes the closest hit -- but keeping the five in
+    // left-to-right image order makes them checkable against the render line by
+    // line.
     let middle = Sphere::new(
         Vec3::new(0.0, 0.0, -1.2),
         0.5,
         Material::lambertian(Vec3::new(0.1, 0.2, 0.5)),
     );
     let left = Sphere::new(Vec3::new(-1.0, 0.0, -1.0), 0.5, Material::dielectric(1.5));
-    // `1.0 / 1.50` is the listing's own reciprocal, not a typo: the bubble is
+    // `1.0 / 1.50` is that reciprocal deliberately, not a typo: the bubble is
     // glass-within-glass, so entering it divides by 1.5 exactly as leaving the
     // shell does, and the net effect on a ray crossing both is nothing.
     let bubble = Sphere::new(
@@ -105,15 +104,15 @@ fn build_spheres() -> Vec<Box<dyn Hittable>> {
     ]
 }
 
-/// The cover listing's grid: `a` and `b` run -11 through 10 inclusive, which is
+/// The cover scene's grid: `a` and `b` run -11 through 10 inclusive, which is
 /// 22 values each, so 22 * 22 = 484 cells before the gap removes any. Each cell
 /// is 0.9 wide and its spheres have radius 0.2, so neighbouring cells never
 /// touch.
 const COVER_GRID_MIN: i32 = -11;
 const COVER_GRID_MAX: i32 = 11;
 
-/// The gap the listing carves around its foreground metal ball: the closed ball
-/// of radius 0.9 about (4, 0.2, 0), from which no grid sphere may come.
+/// The gap carved around the foreground metal ball: the closed ball of radius
+/// 0.9 about (4, 0.2, 0), from which no grid sphere may come.
 const COVER_GAP_CENTER: Vec3 = Vec3::new(4.0, 0.2, 0.0);
 const COVER_GAP_RADIUS: f64 = 0.9;
 
@@ -121,13 +120,12 @@ const COVER_GAP_RADIUS: f64 = 0.9;
 const COVER_SMALL_RADIUS: f64 = 0.2;
 const COVER_LARGE_RADIUS: f64 = 1.0;
 
-/// §14's material draw, split out so the 80/15/5 split can be tested without a
-/// camera. `choose_mat` is the value the listing drew *before* the sphere's
+/// The cover scene's material draw, split out so the 80/15/5 split can be tested
+/// without a camera. `choose_mat` is the value drawn *before* the sphere's
 /// centre and it is passed in rather than drawn here, so the draw order stays
-/// the book's: a sphere that fails the gap test spends nothing further, exactly
-/// as in the listing.
+/// intact: a sphere that fails the gap test spends nothing further.
 ///
-/// The thresholds are the listing's, and their boundaries are tested directly:
+/// The thresholds are tested at their boundaries directly:
 /// `0.8` is already metal, `0.95` is already glass.
 fn material_for(choose_mat: f64, rng: &mut Rng) -> Material {
     if choose_mat < 0.8 {
@@ -140,14 +138,14 @@ fn material_for(choose_mat: f64, rng: &mut Rng) -> Material {
     }
 }
 
-/// The book's final render (§14, Listing 88): a field of randomly placed and
-/// randomly materialled spheres, plus three deliberate foreground ones.
+/// The cover render: a field of randomly placed and randomly materialled
+/// spheres, plus three deliberate foreground ones.
 ///
 /// The ground here is `(0, -1000, 0)` with radius 1000 -- deliberately *not* the
-/// §6 ground of `build_spheres`. This one's surface tops out at
+/// ground of `build_spheres`. This one's surface tops out at
 /// -1000 + 1000 = 0, which is where the grid spheres rest (their centres are at
 /// y = 0.2 with radius 0.2) and where the three foreground spheres rest (y = 1,
-/// radius 1). Only the §6 scene needs its surface at y = -0.5, because that
+/// radius 1). Only the spheres scene needs its surface at y = -0.5, because that
 /// scene's eye sits at the origin and would otherwise be standing on the
 /// ground; here the eye is at (13, 2, 3), two units clear of the surface.
 fn build_cover(rng: &mut Rng) -> Vec<Box<dyn Hittable>> {
@@ -164,7 +162,7 @@ fn build_cover(rng: &mut Rng) -> Vec<Box<dyn Hittable>> {
             let choose_mat = rng.f64();
             let center = Vec3::new(a as f64 + 0.9 * rng.f64(), 0.2, b as f64 + 0.9 * rng.f64());
 
-            // The listing adds the sphere only when its centre is *further* than
+            // The sphere is added only when its centre is *further* than
             // 0.9 from (4, 0.2, 0), so the gap is the closed ball and `continue`
             // is its negation. Reading this the other way round fills the gap and
             // buries the foreground metal ball it exists to clear.
@@ -265,11 +263,12 @@ mod tests {
         // invisible to any probe that only looks at the outside of the left
         // ball, and its omission from an earlier version of this scene cost a
         // whole feature -- the hollow-glass render -- while every other test
-        // stayed green. Five, because §11's Listing 79 has five spheres.
+        // stayed green. Five, because the scene defines five sphere objects and the
+        // hollow bubble is one of them, not part of the shell it sits inside.
         assert_eq!(build(Scene::Spheres, &mut Rng::seed_from_u64(0)).len(), 5);
     }
 
-    /// The listing's own geometry, read back through rays rather than off the
+    /// The scene's own geometry, read back through rays rather than off the
     /// trait objects: a matte ball at `z = -1.2` and a bubble of radius 0.4
     /// inside the left glass shell.
     ///
@@ -430,7 +429,7 @@ mod tests {
         // The bug this scene guards: a ground at (0,-1000,0) with r = 1000 has
         // its surface at y = 0, exactly where the camera is, so every ray that
         // tilts downward starts already inside the sphere and no ray reaches the
-        // sky. The book's §6 ground tops out at y = -0.5, so a ray from the
+        // sky. The spheres scene's ground tops out at y = -0.5, so a ray from the
         // origin aimed straight up misses everything.
         let objects = build(Scene::Spheres, &mut Rng::seed_from_u64(0));
         let mut world = HittableList::new();
@@ -444,19 +443,20 @@ mod tests {
 
     #[test]
     fn the_spheres_scene_is_the_same_whatever_the_seed() {
-        // `build` takes a generator now, but the §6 world has nothing random in
-        // it. If it started drawing, the §6 render would stop being reproducible
-        // from its seed -- the guarantee the cover scene relies on.
+        // `build` takes a generator now, but the spheres world has nothing
+        // random in it. If it started drawing, the spheres render would stop
+        // being reproducible from its seed -- the guarantee the cover scene
+        // relies on.
         let a = build(Scene::Spheres, &mut Rng::seed_from_u64(0));
         let b = build(Scene::Spheres, &mut Rng::seed_from_u64(12345));
         assert_eq!(a.len(), b.len());
     }
 
-    /// The cover ground is the book's `(0, -1000, 0)` with radius 1000, whose
-    /// surface is at y = 0 -- *not* §6's geometry, whose surface is at y = -0.5.
+    /// The cover ground is `(0, -1000, 0)` with radius 1000, whose surface is at
+    /// y = 0 -- *not* the spheres scene's geometry, whose surface is at y = -0.5.
     ///
     /// Measured by shooting, not by inspecting, because `build` hands back trait
-    /// objects. The listing's eye at (13, 2, 3) is outside every grid sphere
+    /// objects. The cover eye at (13, 2, 3) is outside every grid sphere
     /// (they span x and z in [-10.9, 10.9] and y in [0, 0.4]) and above the
     /// ground, so a ray dropped from there can only reach the ground.
     ///
@@ -472,7 +472,7 @@ mod tests {
     /// 2.089 for the upper and 1002 + 999.91... for the lower, which is behind
     /// the eye, so only the upper one counts.
     #[test]
-    fn the_cover_ground_is_the_books_big_flat_one_not_the_six_spheres_ground() {
+    fn the_cover_ground_is_the_big_flat_one_not_the_spheres_ground() {
         let rec = with_cover_world(0, |world| {
             world.hit(&down_from(13.0, 2.0, 3.0), 0.001, f64::INFINITY)
         })
@@ -489,24 +489,26 @@ mod tests {
             "cover ground at t = {}, expected about 2.089",
             rec.t
         );
-        // And emphatically not §6's. Dropping this scene's ray into §6's ground
-        // instead -- a sphere at (0, -100.5, -1) with radius 100 -- gives
+        // And emphatically not the spheres scene's. Dropping this scene's ray into
+        // that ground instead -- a sphere at (0, -100.5, -1) with radius 100 --
+        // gives
         // `oc = (13, 102.5, 4)`, `a = 1`, `half_b = -102.5` and
         // `c = 169 + 10506.25 + 16 - 10000 = 691.25`, so the near root is
         // `102.5 - sqrt(10506.25 - 691.25) = 102.5 - sqrt(9815)` = 3.4288. That
         // is 1.34 away from the cover's answer, so the two cannot be confused.
         assert!(
             (rec.t - 3.428_804).abs() > 0.1,
-            "that is §6's ground, not the cover's"
+            "that is the spheres ground, not the cover's"
         );
     }
 
     /// The cover eye is in open sky, not inside the ground.
     ///
-    /// §6 has a test of the same name, but it does not transfer: the cover
-    /// ground's surface *is* y = 0, so a §6-shaped check here would pass for the
-    /// wrong reason and hide a real regression. This scene's eye is at y = 2 and
-    /// the surface is at y = 0, so a ray straight up from it misses everything.
+    /// The spheres scene has a test of the same name, but it does not transfer: the
+    /// cover ground's surface *is* y = 0, so a spheres-shaped check here would
+    /// pass for the wrong reason and hide a real regression. This scene's eye is
+    /// at y = 2 and the surface is at y = 0, so a ray straight up from it misses
+    /// everything.
     #[test]
     fn the_cover_eye_is_above_the_ground_and_sees_the_sky() {
         with_cover_world(0, |world| {
@@ -527,7 +529,7 @@ mod tests {
     /// i.e. t = 4.6, and the ground is past t = 5, so nothing in the field can
     /// get in the way and all three `t` values are exactly 3.
     #[test]
-    fn the_three_foreground_spheres_are_where_the_listing_puts_them() {
+    fn the_three_foreground_spheres_sit_where_the_cover_frame_puts_them() {
         with_cover_world(0, |world| {
             let glass = world
                 .hit(&down_from(0.0, 5.0, 0.0), 0.001, f64::INFINITY)
@@ -691,8 +693,8 @@ mod tests {
     ///   - so the grid contributes 480 to 484 spheres, and the ground plus the
     ///     three foreground balls add 4.
     ///
-    /// That is [484, 488]. The brief's `> 300` is true of every layout the
-    /// listing can produce and so asserts nothing at all.
+    /// That is [484, 488]. The brief's `> 300` is true of every layout this
+    /// scene can produce and so asserts nothing at all.
     ///
     /// Measured over seeds 0 through 7: 486, 486, 487, 484, 485, 485, 485, 484.
     /// The gap really does remove a varying number of spheres rather than
@@ -758,7 +760,7 @@ mod tests {
         assert_eq!(probe_signature(0), probe_signature(0));
     }
 
-    /// §14's material split is 80% Lambertian, 15% metal, 5% glass.
+    /// The cover scene's material split is 80% Lambertian, 15% metal, 5% glass.
     ///
     /// Over 100_000 independent draws the counts should sit at 80000, 15000 and
     /// 5000. The binomial standard deviations are
@@ -817,10 +819,10 @@ mod tests {
         ));
     }
 
-    /// §10's metal in the cover listing: albedo uniform in [0.5, 1) and fuzz
+    /// The cover scene's metal: albedo uniform in [0.5, 1) and fuzz
     /// uniform in [0, 0.5).
     #[test]
-    fn cover_metal_is_the_listings_metal() {
+    fn cover_metal_uses_the_pinned_albedo() {
         let mut rng = Rng::seed_from_u64(3);
         for _ in 0..10_000 {
             let Material::Metal { albedo, fuzz } = material_for(0.9, &mut rng) else {
@@ -838,7 +840,7 @@ mod tests {
 
     /// The Lambertian albedo is a *product* of two uniform colours, not one.
     ///
-    /// The listing writes `color::random() * color::random()`, so each component is
+    /// The albedo is `color::random() * color::random()`, so each component is
     /// the product of two independent uniforms on [0, 1). What tells that apart
     /// from a single uniform colour is how often the result clears 0.5:
     ///

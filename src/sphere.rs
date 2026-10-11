@@ -24,7 +24,7 @@ impl Sphere {
 
 impl Hittable for Sphere {
     fn hit(&self, ray: &Ray, t_min: f64, t_max: f64) -> Option<HitRecord> {
-        // §6.2: divide the quadratic through by 4 and track half of b, so the
+        // Divide the quadratic through by 4 and track half of b, so the
         // discriminant is half_b^2 - a*c instead of b^2 - 4*a*c.
         let oc = ray.origin - self.center;
         let a = ray.direction.dot(ray.direction);
@@ -48,7 +48,7 @@ impl Hittable for Sphere {
         let point = ray.at(t);
         let outward = (point - self.center) / self.radius;
 
-        // §6.4: the normal always opposes the incoming ray, whichever face.
+        // The normal always opposes the incoming ray, whichever face.
         let front_face = ray.direction.dot(outward) < 0.0;
         let normal = if front_face { outward } else { -outward };
 
@@ -72,7 +72,7 @@ mod tests {
     }
 
     #[test]
-    fn hits_the_book_example_exactly() {
+    fn hits_the_known_ray_exactly() {
         let sphere = Sphere::new(Vec3::ZERO, 0.5, Material::lambertian(Vec3::UNIT));
         let ray = Ray::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
         assert_eq!(sphere.hit(&ray, 0.001, f64::INFINITY).unwrap().t, 10.5);
@@ -119,8 +119,10 @@ mod tests {
     }
 
     #[test]
-    fn half_b_form_agrees_with_the_books_full_quadratic() {
-        // The book's own worked numbers through both formulations.
+    fn half_b_form_agrees_with_the_full_quadratic() {
+        // A sphere of radius 0.5 centred at (0, 0, -1), struck straight
+        // down the -z axis from the origin: the worked numbers both
+        // formulations are checked against.
         let sphere = Sphere::new(
             Vec3::new(0.0, 0.0, -1.0),
             0.5,
@@ -141,7 +143,7 @@ mod tests {
     }
 
     /// The record has to report the sphere's own material, not a default one,
-    /// or §9 would shade every surface the same.
+    /// or every surface would shade the same.
     #[test]
     fn hit_reports_the_sphere_material() {
         let material = Material::lambertian(Vec3::new(0.7, 0.3, 0.3));

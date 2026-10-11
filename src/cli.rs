@@ -2,16 +2,16 @@
 
 use std::path::Path;
 
-use crate::camera::{CHAPTER_TWELVE_ASPECT, Camera};
+use crate::camera::{Camera, PINHOLE_ASPECT};
 use crate::error::RenderError;
 use crate::scene::Scene;
 
 /// Where renders go when `--out` is omitted.
-pub const DEFAULT_OUTPUT: &str = "images/rtiow.ppm";
+pub const DEFAULT_OUTPUT: &str = "images/render.ppm";
 
-/// The book's chapter-12/13 setup, used when no flags are given.
-pub const DEFAULT_WIDTH: usize = crate::camera::CHAPTER_TWELVE_WIDTH;
-pub const DEFAULT_SAMPLES: usize = crate::camera::CHAPTER_TWELVE_SAMPLES;
+/// The default camera's setup, used when no flags are given.
+pub const DEFAULT_WIDTH: usize = crate::camera::PINHOLE_WIDTH;
+pub const DEFAULT_SAMPLES: usize = crate::camera::PINHOLE_SAMPLES;
 pub const DEFAULT_SEED: u64 = 0;
 
 /// The two image encoders `--out` can name.
@@ -105,13 +105,14 @@ impl Options {
         }
 
         // `--width 0` never reaches a camera, so it is caught here. The height
-        // in the error is the one §12's rule would have derived for that width,
+        // in the error is the one the height rule would have derived for that
+        // width,
         // rather than a made-up zero: `Camera::derived_height` is the only place
         // that rule is written down.
         if opts.width == 0 {
             return Err(RenderError::InvalidDimension {
                 width: 0,
-                height: Camera::derived_height(0, CHAPTER_TWELVE_ASPECT),
+                height: Camera::derived_height(0, PINHOLE_ASPECT),
             });
         }
         if opts.samples_per_pixel == 0 {
@@ -167,13 +168,13 @@ OPTIONS:
     --samples <N>   Samples per pixel         [default: 100]
     --seed <N>      PRNG seed                 [default: 0]
     --scene <NAME>  Scene to render           [default: spheres]
-    --out <PATH>    Output path               [default: images/rtiow.ppm]
+    --out <PATH>    Output path               [default: images/render.ppm]
     --help, -h      Print this message
 
 Height is derived from a 16:9 aspect ratio, so --width 400 gives 400x225.
 --out takes a .ppm or a .png path and picks that encoder; any other
 extension is an error.
-Scenes: spheres, cover. The cover scene is the book's final image: 1200x675
+Scenes: spheres, cover. The cover scene is the largest image: 1200x675
 at 500 samples per pixel, a field of 484 randomly placed spheres. It is
 hours of CPU time at that size, so start smaller --
 --scene cover --width 80 --samples 4 --out images/tmp.png.
@@ -190,13 +191,13 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_the_book() {
+    fn defaults_match_the_default_camera() {
         let opts = parse(&[]).unwrap();
         assert_eq!(opts.width, 400);
         assert_eq!(opts.samples_per_pixel, 100);
         assert_eq!(opts.seed, 0);
         assert_eq!(opts.scene, Scene::Spheres);
-        assert_eq!(opts.out, "images/rtiow.ppm");
+        assert_eq!(opts.out, "images/render.ppm");
         assert!(!opts.help);
     }
 
@@ -214,7 +215,7 @@ mod tests {
         // from drifting apart when a scene is added or reordered.
         assert_eq!(Options::default().scene, Scene::Spheres);
         assert_eq!(Scene::parse(SCENE_NAMES[0]).unwrap(), Scene::Spheres);
-        // The book really does say 400 wide at 100 samples.
+        // The default camera really is 400 wide at 100 samples.
         assert_eq!(DEFAULT_WIDTH, 400);
         assert_eq!(DEFAULT_SAMPLES, 100);
     }
@@ -308,9 +309,9 @@ mod tests {
 
     #[test]
     fn rejects_zero_width() {
-        // The height is the one §12's rule derives for a zero width: 0 / (16/9)
+        // The height is the one the rule derives for a zero width: 0 / (16/9)
         // = 0, floored at 1.
-        assert_eq!(Camera::derived_height(0, CHAPTER_TWELVE_ASPECT), 1);
+        assert_eq!(Camera::derived_height(0, PINHOLE_ASPECT), 1);
         assert!(matches!(
             parse(&["--width", "0"]).unwrap_err(),
             RenderError::InvalidDimension {
@@ -346,7 +347,7 @@ mod tests {
         // help should not quietly start lying.
         assert!(USAGE.contains("[default: 400]"));
         assert!(USAGE.contains("[default: 100]"));
-        assert!(USAGE.contains("[default: images/rtiow.ppm]"));
+        assert!(USAGE.contains("[default: images/render.ppm]"));
         assert!(USAGE.contains("[default: spheres]"));
         assert!(USAGE.contains("400x225"));
     }
@@ -422,7 +423,7 @@ mod tests {
             // `Path::new("png")` has no *extension* -- it is a bare stem -- so
             // the advertised names are checked as `out.png`, which is how they
             // appear in the help.
-            let advertised = format!("images/rtiow.{extension}");
+            let advertised = format!("images/render.{extension}");
             assert_eq!(
                 encoder_for(Path::new(&advertised)).is_ok(),
                 true,

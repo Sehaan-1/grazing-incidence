@@ -1,10 +1,10 @@
 //! Rendering entry point.
 
 use crate::camera::{
-    CHAPTER_THIRTEEN_DEFOCUS_ANGLE, CHAPTER_THIRTEEN_FOCUS_DIST, CHAPTER_THIRTEEN_VFOV,
-    CHAPTER_TWELVE_ASPECT, CHAPTER_TWELVE_DEPTH, CHAPTER_TWELVE_LOOKAT, CHAPTER_TWELVE_LOOKFROM,
-    CHAPTER_TWELVE_VUP, COVER_ASPECT, COVER_DEFOCUS_ANGLE, COVER_DEPTH, COVER_FOCUS_DIST,
-    COVER_LOOKAT, COVER_LOOKFROM, COVER_VFOV, COVER_VUP, Camera,
+    APERTURED_DEFOCUS_ANGLE, APERTURED_FOCUS_DIST, APERTURED_VFOV, COVER_ASPECT,
+    COVER_DEFOCUS_ANGLE, COVER_DEPTH, COVER_FOCUS_DIST, COVER_LOOKAT, COVER_LOOKFROM, COVER_VFOV,
+    COVER_VUP, Camera, PINHOLE_ASPECT, PINHOLE_DEPTH, PINHOLE_LOOKAT, PINHOLE_LOOKFROM,
+    PINHOLE_VUP,
 };
 use crate::cli::Options;
 use crate::error::RenderError;
@@ -13,17 +13,16 @@ use crate::image::Image;
 use crate::rng::Rng;
 use crate::scene::{self, Scene};
 
-/// Whether to apply the sqrt gamma encode when writing pixels (§9).
+/// Whether to apply the sqrt gamma encode when writing pixels.
 pub const GAMMA: bool = true;
 
 /// The camera for a scene, at the size the command line asked for.
 ///
-/// §13 hardcodes 400 wide at 100 samples and §14 hardcodes 1200 at 500, but the
-/// command line owns both numbers -- §12 is what made the width the only
-/// dimension a caller has to give. So the scene picks the *lens* and the caller
-/// picks the size, and the named constructors (`Camera::chapter_twelve`,
-/// `Camera::chapter_thirteen`, `Camera::cover`) are what pin the sizes the book
-/// actually used.
+/// The named constructors pin fixed sizes -- `Camera::pinhole` and
+/// `Camera::apertured` at 400 wide and 100 samples, `Camera::cover` at
+/// 1200 and 500 -- but the command line owns both numbers, and the width is the
+/// only dimension a caller has to give. So the scene picks the *lens* and the
+/// caller picks the size.
 ///
 /// `Camera::cover` is deliberately *not* called here. It returns a camera
 /// hardwired to 1200x675 at 500 samples, which would ignore `--width` and
@@ -34,14 +33,14 @@ fn camera_for(scene: Scene, width: usize, samples_per_pixel: usize) -> Camera {
         Scene::Spheres => Camera::new(
             width,
             samples_per_pixel,
-            CHAPTER_TWELVE_DEPTH,
-            CHAPTER_TWELVE_ASPECT,
-            CHAPTER_THIRTEEN_VFOV,
-            CHAPTER_TWELVE_LOOKFROM,
-            CHAPTER_TWELVE_LOOKAT,
-            CHAPTER_TWELVE_VUP,
-            CHAPTER_THIRTEEN_DEFOCUS_ANGLE,
-            CHAPTER_THIRTEEN_FOCUS_DIST,
+            PINHOLE_DEPTH,
+            PINHOLE_ASPECT,
+            APERTURED_VFOV,
+            PINHOLE_LOOKFROM,
+            PINHOLE_LOOKAT,
+            PINHOLE_VUP,
+            APERTURED_DEFOCUS_ANGLE,
+            APERTURED_FOCUS_DIST,
         ),
         Scene::Cover => Camera::new(
             width,
@@ -59,13 +58,13 @@ fn camera_for(scene: Scene, width: usize, samples_per_pixel: usize) -> Camera {
 }
 
 /// Cast `opts.samples_per_pixel` jittered rays per pixel through the scene's
-/// camera and shade each hit (§6, §8, §12, §13, §14).
+/// camera and shade each hit.
 ///
-/// The scene chooses the lens -- §13's 20-degree lens from (-2, 2, 1) focused at
-/// 3.4, or §14's from (13, 2, 3) focused at 10 -- while the width, the sample
-/// count, the seed and the scene itself come from the command line. §12 is what
-/// makes the width the only dimension a caller has to give: the height follows
-/// from the 16:9 aspect ratio.
+/// The scene chooses the lens -- the spheres scene's 20-degree lens from
+/// (-2, 2, 1) focused at 3.4, or the cover's from (13, 2, 3) focused at 10 --
+/// while the width, the sample count, the seed and the scene itself come from
+/// the command line. The width is the only dimension a caller has to give: the
+/// height follows from the 16:9 aspect ratio.
 ///
 /// **Scene construction and the render share one generator.** The cover scene
 /// draws from `rng` to place its 484 spheres, and the render then draws from
@@ -195,8 +194,8 @@ mod tests {
     }
 
     #[test]
-    fn the_render_takes_its_size_from_the_options_not_from_the_chapter() {
-        // `Camera::chapter_twelve` hardcodes 400 wide at 100 samples. If
+    fn the_render_takes_its_size_from_the_options_not_from_a_pinned_camera() {
+        // `Camera::pinhole` hardcodes 400 wide at 100 samples. If
         // `render_scene` reached for that instead of reading `opts`, the CLI
         // would quietly ignore --width and --samples and this test would fail
         // on the dimensions rather than on a two-minute render.
@@ -216,7 +215,7 @@ mod tests {
 
     #[test]
     fn the_cover_scene_renders_through_the_same_path() {
-        // Proves the §14 wiring end to end at a size that costs nothing: the
+        // Proves the cover wiring end to end at a size that costs nothing: the
         // scene builds, the cover lens is used, and pixels come out finite and
         // in range. 8 / (16/9) = 4.5 truncates to 4, so this is 8x4 = 32 pixels.
         let image = render_scene(&small_scene(
@@ -236,7 +235,7 @@ mod tests {
                 .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
             "every cover channel should be finite and inside [0, 1]"
         );
-        // And the cover is not the §6 scene wearing a new name: a field of
+        // And the cover is not the spheres scene wearing a new name: a field of
         // matte spheres has no blue in it and plenty of it, so at least one
         // pixel is off-black.
         assert!(
@@ -247,7 +246,7 @@ mod tests {
 
     #[test]
     fn the_cover_scene_honours_the_command_lines_width_and_samples() {
-        // `Camera::cover` is the listing's own 1200x675 at 500. Calling it from
+        // `Camera::cover` is the cover render's own 1200x675 at 500. Calling it from
         // `render_scene` would ignore `--width` and `--samples` outright, and
         // this test is what says it does not: 20 wide is 20x11 --
         // 20 / (16/9) = 11.25 truncates to 11 -- at 2 samples.
@@ -258,7 +257,7 @@ mod tests {
     #[test]
     fn the_cover_scene_is_reproducible_from_its_seed() {
         // The cover draws from the shared generator *before* the render does, so
-        // this asserts more than the §6 test above: the same seed has to
+        // this asserts more than the spheres test above: the same seed has to
         // reproduce the sphere layout and the sampling together. Two different
         // seeds have to move the pixels, which is what says the layout really is
         // seed-driven and not merely fixed.
@@ -275,7 +274,7 @@ mod tests {
 
     #[test]
     fn gamma_is_on_and_is_the_encode_that_reaches_the_file() {
-        assert!(GAMMA, "gamma correction landed in §9 and stays on");
+        assert!(GAMMA, "gamma correction stays on");
 
         let image = render_scene(&small(6, 1, DEFAULT_SEED)).unwrap();
         // 6 / (16/9) = 3.375 truncates to 3.

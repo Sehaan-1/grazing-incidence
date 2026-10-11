@@ -42,7 +42,7 @@ impl Rng {
         min + (max - min) * self.f64()
     }
 
-    /// A uniformly distributed point on the unit sphere, by rejection (§8).
+    /// A uniformly distributed point on the unit sphere, by rejection.
     pub fn unit_vector(&mut self) -> Vec3 {
         loop {
             let v = Vec3::new(
@@ -56,7 +56,7 @@ impl Rng {
         }
     }
 
-    /// A uniformly distributed point in the unit disk, by rejection (§8).
+    /// A uniformly distributed point in the unit disk, by rejection.
     pub fn in_unit_disk(&mut self) -> Vec3 {
         loop {
             let p = Vec3::new(self.range(-1.0, 1.0), self.range(-1.0, 1.0), 0.0);

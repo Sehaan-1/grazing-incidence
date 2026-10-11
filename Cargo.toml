@@ -3,7 +3,7 @@ name = "grazing-incidence"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A ray tracer built by porting Ray Tracing in One Weekend to Rust"
+description = "A ray tracer in Rust: diffuse, metal and dielectric materials, depth of field, and a hand-rolled PNG encoder. Zero dependencies."
 license = "MIT"
 
 [dependencies]

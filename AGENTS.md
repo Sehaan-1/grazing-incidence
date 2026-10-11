@@ -1,11 +1,11 @@
 # AGENTS.md
 
-Working agreement for `grazing-incidence`: a zero-dependency Rust ray tracer that
-ports [*Ray Tracing in One Weekend*](https://raytracing.github.io/books/RayTracingInOneWeekend.html)
-chapter by chapter, with one commit per chapter.
+Working agreement for `grazing-incidence`: a zero-dependency Rust ray tracer with
+diffuse, metal and dielectric materials, depth of field, antialiasing, and a
+hand-rolled PNG encoder.
 
-`README.md` says what the renderer does and why it is built this way. This file
-says what must stay true while you change it, and how to prove it did.
+`README.md` says what it does and why it is built this way. This file says what
+must stay true while you change it, and how to prove it did.
 
 ---
 
@@ -38,7 +38,8 @@ so read that column before changing the code.
 
 `render_scene` seeds a single `Rng` from `opts.seed` and threads one `&mut` through
 both `scene::build` and `Camera::render`. Scene layout and pixel sampling draw
-from the same stream, which is what makes the cover reproducible from its seed.
+from the same stream, which is what makes the `cover` scene reproducible from its
+seed.
 
 *Fails by:* spending a draw somewhere new. Nothing panics and nothing fails — the
 render just quietly differs between runs and the committed images stop meaning
@@ -56,23 +57,25 @@ zero. `Image::new` bounds the product at `MAX_PIXELS` (`1 << 24`) for the same
 family of reasons — an unbounded `width * height` used to abort with
 `capacity overflow`.
 
-### The mirror follows the anchor
+### Row order follows the anchor
 
-Two camera anchors exist in this repo's history and they need opposite row
-handling:
+The camera can be anchored at either corner of the viewport, and the two need
+opposite row handling:
 
-| Anchor | Loop | Row written first |
-|---|---|---|
-| `lower_left_corner` (bottom-left, §4–§11) | `for j in 0..height` | bottom of the viewport → **mirror the write index** |
-| `pixel00_loc` (top-left, §12 onward) | `for j in 0..height` | top of the viewport → **no mirror** |
+| Anchor | Loop | Row written first | Correct index |
+|---|---|---|---|
+| bottom-left corner | `for j in 0..height` | bottom of the viewport | `image.set(i, height - 1 - j, …)` |
+| top-left `pixel00_loc` | `for j in 0..height` | top of the viewport | `image.set(i, j, …)` |
 
-The current camera uses `pixel00_loc`, so `Camera::render` writes `image.set(i, j, …)`.
-Adding a mirror there flips the image upside-down.
+The current camera uses `pixel00_loc` with a downward `pixel_delta_v`, so
+`Camera::render` writes `image.set(i, j, …)`. Adding a mirror there flips the
+image upside-down.
 
-*Fails by:* an upside-down picture that nothing panics on. It stayed invisible for
-three chapters because a gradient looks the same mirrored and a centred sphere is
-symmetric — it only surfaced when a ground plane arrived. If you reintroduce a
-bottom-left anchor, mirror its write index, and keep an orientation test.
+*Fails by:* an upside-down picture that nothing panics on. This stayed invisible
+for three milestones because a gradient looks the same mirrored and a centred
+sphere is symmetric — it only surfaced when a ground plane arrived. If you
+reintroduce a bottom-left anchor, mirror its write index, and keep an orientation
+test.
 
 ### Gamma is applied at write time
 
@@ -80,19 +83,19 @@ bottom-left anchor, mirror its write index, and keep an orientation test.
 `renderer::GAMMA`. `Image::pixels` stays linear.
 
 *Fails by:* gamma applied during accumulation, which reads as a plausible-looking
-image until someone compares it to the book's.
+image until someone measures it against a reference.
 
 ### Pixels are `[f64; 3]`, not `Vec3`
 
-`Image` stores `Vec<[f64; 3]>`, because at chapter 2 the `vec3` module did not
-exist yet and `image.rs` was never rewritten for it. Convert at the boundary with
-`Vec3::to_rgb` / `Vec3::from_rgb`.
+`Image` stores `Vec<[f64; 3]>` because the pixel buffer predates the `vec3`
+module, and `image.rs` has never been rewritten for it. Convert at the boundary
+with `Vec3::to_rgb` / `Vec3::from_rgb`.
 
 ### Zero dependencies
 
 `Cargo.toml [dependencies]` stays empty. The PRNG, PPM and PNG encoders, CRC-32,
 Adler-32, DEFLATE, argument parsing and error types are all hand-rolled — that is
-the educational premise of the project, not an accident.
+the premise of the project, not an accident.
 
 ### Zero warnings
 
@@ -122,12 +125,12 @@ Done means all five passed. "It compiled" is not done.
 ## Tests
 
 Tests live in `#[cfg(test)] mod tests` at the bottom of the module they test.
-There is no `tests/` directory; the book exposes no seams worth testing from
+There is no `tests/` directory; this codebase exposes no seams worth testing from
 outside.
 
 **Compute every numeric expected value by hand before asserting it.** This is not
-theoretical caution — while this crate was being built, eighteen numeric
-assertions turned out to be wrong, and they failed in recognisable families:
+theoretical caution — eighteen numeric assertions were wrong while this crate was
+being built, and they failed in recognisable families:
 
 - measuring an angle from the plane instead of from the normal (`asin` where the
   quantity wanted `acos`)
@@ -155,19 +158,34 @@ catch, confirm it fails, revert, and record what that proved.
 
 ---
 
-## The book
+## Numerics worth knowing
 
-A local, copyrighted copy of the book sits at the repository root as
-`raytracing-github-io-books-RayTracingInOneWeekend-html.md`. It is gitignored and
-stays that way — it is the input to this project, not part of it.
+These have each cost someone an afternoon. They are collected here so the next
+change does not rediscover them.
 
-Cite it by section number (`Ray Tracing in One Weekend` §11). Reproducing its text,
-code or images would put copyrighted material in a public repository.
-
-Its chapters 4–6 render upside-down: the camera anchors on the *bottom*-left
-viewport corner, counts `j` upward, and PPM writes the first row as the top. This
-repo mirrors the write index instead, so images are right-side-up from chapter 4
-and the book is correct again from chapter 12. That deviation is deliberate.
+- **`focus_dist`, not `|lookfrom - lookat|`**, places the viewport plane. The lens
+  admits a cone half-angled at `defocus_angle / 2`, and the defocus disk is that
+  cone's radius at `focus_dist`. Put the viewport anywhere else and the aperture
+  *measured at the viewport* is `2 atan(radius / D)` instead — for the cover,
+  0.4448° instead of 0.6°.
+- **`Sphere::hit` uses the half-`b` quadratic**: divide the whole equation through
+  by 4 and track half of `b`. The discriminant is `half_b² - a·c`.
+- **Normals always oppose the incoming ray**, whichever face was hit, so shading
+  does not have to know.
+- **`t_min` is `0.001`** wherever a hit can immediately re-hit the surface it just
+  left. Zero produces shadow acne.
+- **`near_zero` guards the Lambertian scatter.** `normal + random_unit_vector` can
+  cancel exactly; a zero direction becomes NaN and then black.
+- **Schlick's `r0` is `((1 - eta) / (1 + eta))²`,** so at normal incidence it
+  returns `0.04` for air into glass whether `eta` is `1/1.5` or `1.5`. The argument
+  is the *ratio*, not the material's index, despite reading like one.
+- **Total internal reflection is `ri * sin_theta > 1.0`,** strictly. `>=` would
+  refract at exactly the critical angle, where the refracted ray is tangent to the
+  surface and has no energy behind it.
+- **The clamp in `write_ppm` is `0.999`, not `1.0`,** so a fully lit channel
+  encodes to 255 rather than 256.
+- **CRC-32 and Adler-32 have a final XOR.** CRC-32 folds in `0xFFFFFFFF` at both
+  ends; Adler-32 starts at 1, not 0.
 
 ---
 
@@ -180,7 +198,10 @@ and the book is correct again from chapter 12. That deviation is deliberate.
 | `src/material.rs` | `Material`: Lambertian, Metal, Dielectric |
 | `src/renderer.rs` | `render_scene`, the render entry point |
 | `src/scene.rs` | `Scene::Spheres`, `Scene::Cover` |
-| `src/image.rs` | pixel buffer, PPM writer, PNG dispatch |
-| `src/png.rs` | CRC-32, Adler-32, LZ77 + fixed-Huffman DEFLATE |
+| `src/image.rs` | pixel buffer, PPM writer, encoder dispatch |
+| `src/png.rs` | CRC-32, Adler-32, LZ77 and fixed-Huffman DEFLATE |
 | `src/rng.rs` | PCG32 |
 | `images/` | committed renders, per milestone |
+
+`reference.md` at the repository root is local, copyrighted working material. It
+is gitignored and stays that way — cite nothing from it, and commit none of it.

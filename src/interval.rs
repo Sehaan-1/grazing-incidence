@@ -16,7 +16,7 @@ impl Interval {
         Self { min, max }
     }
 
-    /// True when `x` lies within the interval, endpoints included (§6.8).
+    /// True when `x` lies within the interval, endpoints included.
     pub fn contains(&self, x: f64) -> bool {
         self.min <= x && x <= self.max
     }

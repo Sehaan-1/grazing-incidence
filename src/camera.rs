@@ -7,28 +7,29 @@ use crate::ray::Ray;
 use crate::rng::Rng;
 use crate::vec3::Vec3;
 
-/// The book's §12 listing, split into constants so `chapter_twelve`, the
+/// The default camera, split into constants so `pinhole`, the
 /// renderer and the CLI all read the framing off one place instead of each
 /// restating it.
-pub const CHAPTER_TWELVE_WIDTH: usize = 400;
-pub const CHAPTER_TWELVE_SAMPLES: usize = 100;
-pub const CHAPTER_TWELVE_DEPTH: usize = 50;
-pub const CHAPTER_TWELVE_ASPECT: f64 = 16.0 / 9.0;
-pub const CHAPTER_TWELVE_VFOV: f64 = 90.0;
-pub const CHAPTER_TWELVE_LOOKFROM: Vec3 = Vec3::new(-2.0, 2.0, 1.0);
-pub const CHAPTER_TWELVE_LOOKAT: Vec3 = Vec3::new(0.0, 0.0, -1.0);
-pub const CHAPTER_TWELVE_VUP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
+pub const PINHOLE_WIDTH: usize = 400;
+pub const PINHOLE_SAMPLES: usize = 100;
+pub const PINHOLE_DEPTH: usize = 50;
+pub const PINHOLE_ASPECT: f64 = 16.0 / 9.0;
+pub const PINHOLE_VFOV: f64 = 90.0;
+pub const PINHOLE_LOOKFROM: Vec3 = Vec3::new(-2.0, 2.0, 1.0);
+pub const PINHOLE_LOOKAT: Vec3 = Vec3::new(0.0, 0.0, -1.0);
+pub const PINHOLE_VUP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 
-/// §13 narrows the lens from 90 degrees to 20 and opens it to a 10-degree
-/// aperture focused at 3.4. The eye and the target are unchanged from §12 --
-/// only the framing and the aperture move, so they keep the §12 constants.
-pub const CHAPTER_THIRTEEN_VFOV: f64 = 20.0;
-pub const CHAPTER_THIRTEEN_DEFOCUS_ANGLE: f64 = 10.0;
-pub const CHAPTER_THIRTEEN_FOCUS_DIST: f64 = 3.4;
+/// `apertured` narrows the lens from 90 degrees to 20 and opens it to a
+/// 10-degree aperture focused at 3.4. The eye and the target are unchanged from
+/// the default camera -- only the framing and the aperture move, so they keep the
+/// `PINHOLE_*` constants.
+pub const APERTURED_VFOV: f64 = 20.0;
+pub const APERTURED_DEFOCUS_ANGLE: f64 = 10.0;
+pub const APERTURED_FOCUS_DIST: f64 = 3.4;
 
-/// §14's camera, split into constants for the same reason §12's were: the
-/// renderer builds a cover camera from the command line's width and sample
-/// count and has to read the rest of the framing off one place.
+/// The cover camera, split into constants for the same reason the default
+/// camera's were: the renderer builds a cover camera from the command line's
+/// width and sample count and has to read the rest of the framing off one place.
 pub const COVER_WIDTH: usize = 1200;
 pub const COVER_SAMPLES: usize = 500;
 pub const COVER_DEPTH: usize = 50;
@@ -40,30 +41,32 @@ pub const COVER_VUP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 pub const COVER_DEFOCUS_ANGLE: f64 = 0.6;
 pub const COVER_FOCUS_DIST: f64 = 10.0;
 
-/// A camera: a pinhole from §7, positioned and aimed from §12, given a
-/// lens aperture in §13.
+/// A camera: a pinhole at a given eye position and aim, optionally with a lens
+/// aperture.
 ///
-/// §12 is where the image stops being a fixed viewport seen from the origin.
-/// The eye moves to `lookfrom`, the frame is built out of `lookat` and `vup`
-/// instead of out of the world axes, and the vertical field of view becomes a
-/// number rather than the implicit `viewport_height = 2`.
-///
-/// The orientation changed with it. §4-§7 anchored on the *bottom*-left
-/// viewport corner and counted `j` upward, so `j = 0` was the bottom of the
-/// picture and `render` had to mirror its write index. §12 anchors on
+/// There are two ways to anchor this camera's frame, and they need opposite row
+/// handling. The original pinhole form anchored on the *bottom*-left viewport
+/// corner and counted `j` upward, so `j = 0` was the bottom of the picture and
+/// `render` had to mirror its write index. The form used here anchors on
 /// `pixel00_loc` -- the *top*-left -- and its `pixel_delta_v` already points
 /// down, because `viewport_v = viewport_height * -v` flips the camera's own up
 /// vector. So `j = 0` is the top row and no mirror is needed. `render` writes
-/// `(i, j)` straight through; see `render`.
+/// `(i, j)` straight through; see `render`. Adding a mirror there flips the
+/// image upside-down.
 ///
-/// §13 gives the camera a lens instead of a pinhole. Ray origins stop being
+/// This form is also where the image stops being a fixed viewport seen from the
+/// origin. The eye moves to `lookfrom`, the frame is built out of `lookat` and
+/// `vup` instead of out of the world axes, and the vertical field of view becomes
+/// a number rather than the implicit `viewport_height = 2`.
+///
+/// The lens aperture is a separate step on top. Ray origins stop being
 /// `lookfrom` and become a uniform point on a defocus disk centred there, sized
 /// by `focus_dist` and `defocus_angle`. The orientation above is untouched:
 /// the disk is spanned by the same `u` and `v`, and the picture still reads
 /// row `j` as row `j`. At `defocus_angle = 0` the disk has zero radius and the
-/// camera is exactly the §7 pinhole again.
+/// camera is exactly the pinhole again.
 ///
-/// §13 also moves the viewport plane, from `|lookfrom - lookat|` out to
+/// The aperture also moves the viewport plane, from `|lookfrom - lookat|` out to
 /// `focus_dist`, and that one *does* matter: see `Camera::new`.
 pub struct Camera {
     pub image_width: usize,
@@ -75,7 +78,7 @@ pub struct Camera {
     pub lookat: Vec3,
     pub vup: Vec3,
 
-    /// The aperture (§13), kept public so a caller can tell a pinhole from a
+    /// The aperture, kept public so a caller can tell a pinhole from a
     /// thin lens without re-deriving it. `defocus_angle` is the full opening
     /// angle of the lens in degrees; `focus_dist` is how far in front of the
     /// eye the plane of focus sits.
@@ -87,14 +90,14 @@ pub struct Camera {
     pixel_delta_u: Vec3,
     pixel_delta_v: Vec3,
 
-    /// The aperture's own basis vectors (§13): `defocus_disk_u = u * radius`
+    /// The aperture's own basis vectors: `defocus_disk_u = u * radius`
     /// and `defocus_disk_v = v * radius`. Together they span the disk that ray
     /// origins are scattered over. At `defocus_angle = 0` both are zero and the
-    /// disk collapses to `lookfrom`, which is the pinhole camera of §7-§12.
+    /// disk collapses to `lookfrom`, which is the plain pinhole camera.
     defocus_disk_u: Vec3,
     defocus_disk_v: Vec3,
 
-    /// The camera frame (§12). `w` points from `lookat` back to `lookfrom`, `u`
+    /// The camera frame. `w` points from `lookat` back to `lookfrom`, `u`
     /// runs right across the picture and `v` runs up it; all three are unit
     /// and mutually perpendicular. They are kept on the camera rather than
     /// discarded at construction so the frame can be inspected.
@@ -104,7 +107,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// §12's height rule, on its own: `image_width / aspect_ratio`, truncated
+    /// The height rule, on its own: `image_width / aspect_ratio`, truncated
     /// toward zero, then floored at 1.
     ///
     /// The floor is what stops a very wide viewport -- or a very small width --
@@ -115,7 +118,7 @@ impl Camera {
         ((image_width as f64 / aspect_ratio) as usize).max(1)
     }
 
-    /// Build the camera frame (§12).
+    /// Build the camera frame.
     ///
     /// `lookfrom` is the eye, `lookat` the point it looks at and `vup` the
     /// world direction that counts as "up" in the picture. `vfov` is the
@@ -128,12 +131,12 @@ impl Camera {
     /// rows increase downward.
     ///
     /// `defocus_angle` is the lens aperture in degrees and `focus_dist` is the
-    /// distance at which the lens is focused (§13).
+    /// distance at which the lens is focused.
     ///
-    /// From §13 onward `focus_dist` is also the distance the viewport plane
-    /// sits in front of the eye -- the book's `viewport_height` and
-    /// `viewport_upper_left` both use it in place of `focal_length`. Only
-    /// `defocus_angle` is purely an aperture: it never moves the viewport.
+    /// `focus_dist` is also the distance the viewport plane sits in front of the
+    /// eye -- `viewport_height` and `viewport_upper_left` both use it in place of
+    /// a focal length. Only `defocus_angle` is purely an aperture: it never moves
+    /// the viewport.
     ///
     /// Using `|lookfrom - lookat|` for the viewport instead is not a harmless
     /// reparameterisation. The lens admits a cone that half-angles at
@@ -146,7 +149,7 @@ impl Camera {
     ///
     /// Ten parameters trips clippy's `too_many_arguments`, which counts `self`
     /// and defaults to a threshold of seven. The arguments are a closed
-    /// record of the book's camera settings rather than a bundle of behaviour,
+    /// record of a camera's settings rather than a bundle of behaviour,
     /// so the attribute is the honest answer here.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -163,13 +166,13 @@ impl Camera {
     ) -> Self {
         let image_height = Self::derived_height(image_width, aspect_ratio);
 
-        // §12 puts the viewport `focal_length` in front of the eye, where
-        // `focal_length = |lookfrom - lookat|`; §13 replaces that distance with
-        // `focus_dist` and leaves `focal_length` dead. The viewport is the
+        // The pinhole form puts the viewport a focal length in front of the
+        // eye, where that focal length is `|lookfrom - lookat|`; an aperture
+        // replaces that distance with `focus_dist`. The viewport is the
         // plane of width `2 h focus_dist` at the eye, half-angled at the edges
         // of `vfov`.
         //
-        // The two distances usually differ. For `chapter_twelve` they are
+        // The two distances usually differ. For `pinhole` they are
         // `sqrt(12) = 3.4641` against 10.0; for the cover `sqrt(182) =
         // 13.4907` against 10.0. Keeping `focal_length` here would silently
         // narrow every open lens, because the defocus disk is sized at
@@ -190,12 +193,12 @@ impl Camera {
         let pixel_delta_v = viewport_v / image_height as f64;
 
         // The upper *left* corner, then the centre of pixel (0, 0). This is
-        // the half-pixel the book's `0.5 *` exists for: without it, pixel (0, 0)
+        // the half-pixel the `0.5 *` exists for: without it, pixel (0, 0)
         // would be sampled at the corner rather than the middle of its square.
         let viewport_upper_left = lookfrom - focus_dist * w - viewport_u / 2.0 - viewport_v / 2.0;
         let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
-        // §13: the defocus disk is the lens aperture. Rays start anywhere on it
+        // The defocus disk is the lens aperture. Rays start anywhere on it
         // rather than all at `lookfrom`, which spreads out-of-focus rays the way
         // a real lens does. The half-angle, not the full angle, is what fixes
         // the radius: the cone of rays the lens admits half-angles at
@@ -203,7 +206,7 @@ impl Camera {
         // radius `focus_dist * tan(that half-angle)`.
         //
         // `defocus_angle = 0` gives a radius of exactly 0, so the disk is the
-        // point `lookfrom` and the camera is the §7 pinhole.
+        // point `lookfrom` and the camera is a plain pinhole.
         let defocus_radius = focus_dist * (crate::degrees_to_radians(defocus_angle / 2.0)).tan();
         let defocus_disk_u = u * defocus_radius;
         let defocus_disk_v = v * defocus_radius;
@@ -231,30 +234,31 @@ impl Camera {
         }
     }
 
-    /// The §12 listing: 400px wide, 16:9, a 90-degree lens from (-2, 2, 1)
-    /// looking at the origin's -z end. §12 has no aperture, so the last two
-    /// arguments pin it shut: a zero `defocus_angle` collapses the defocus disk
-    /// to a point and every ray leaves from `lookfrom`.
-    pub fn chapter_twelve() -> Self {
+    /// The default camera: 400px wide, 16:9, a 90-degree lens from (-2, 2, 1)
+    /// looking at the origin's -z end. There is no aperture here, so the last
+    /// two arguments pin it shut: a zero `defocus_angle` collapses the defocus
+    /// disk to a point and every ray leaves from `lookfrom`.
+    pub fn pinhole() -> Self {
         Self::new(
-            CHAPTER_TWELVE_WIDTH,
-            CHAPTER_TWELVE_SAMPLES,
-            CHAPTER_TWELVE_DEPTH,
-            CHAPTER_TWELVE_ASPECT,
-            CHAPTER_TWELVE_VFOV,
-            CHAPTER_TWELVE_LOOKFROM,
-            CHAPTER_TWELVE_LOOKAT,
-            CHAPTER_TWELVE_VUP,
+            PINHOLE_WIDTH,
+            PINHOLE_SAMPLES,
+            PINHOLE_DEPTH,
+            PINHOLE_ASPECT,
+            PINHOLE_VFOV,
+            PINHOLE_LOOKFROM,
+            PINHOLE_LOOKAT,
+            PINHOLE_VUP,
             0.0,
             10.0,
         )
     }
 
-    /// The §13 listing: the same eye and target as §12, but a 20-degree lens
+    /// `apertured`: the same eye and target as `pinhole`,
+    /// but a 20-degree lens
     /// behind a 10-degree aperture focused at 3.4.
     ///
-    /// `focus_dist = 3.4` sits just inside the middle ball, which §11 moved to
-    /// `(0, 0, -1.2)`:
+    /// `focus_dist = 3.4` sits just inside the middle ball, which the spheres
+    /// scene puts at `(0, 0, -1.2)`:
     ///
     /// ```text
     /// to the left glass ball  = |(-1,0,-1) - (-2,2,1)| = sqrt(1 + 4 + 4)   = 3
@@ -266,52 +270,55 @@ impl Camera {
     ///
     /// so the middle ball is the one that stays sharp and the two outer ones
     /// smear, while the ground running away to the horizon -- infinitely far, in
-    /// the limit -- smears more than either. That is the whole of the chapter's
-    /// image: a wide lens close to the subject blurs everything behind it.
+    /// the limit -- smears more than either. That is the whole point of this
+    /// camera: a wide lens close to the subject blurs everything behind it.
     ///
-    /// (The book's own §13 text calls 3.4 "almost" the distance to the middle
-    /// ball, and quotes `3.4641` for it. That is `sqrt(12)`, the distance to a
-    /// ball at `z = -1` -- §12's geometry. §11's listing already moved the ball
-    /// to `z = -1.2`, so `3.58329562` is the number for this scene.)
+    /// The near miss is worth naming, because it is a number that looks right.
+    /// `3.4` is "almost" the distance to the middle ball, and `3.4641` -- which
+    /// is `sqrt(12)`, the distance to a ball at `z = -1` -- is the figure usually
+    /// quoted for it. Neither is the number for this scene: the middle ball was
+    /// moved to `z = -1.2`, so `3.58329562` is.
     ///
-    /// The frame size and the aspect ratio are read off the §12 constants
-    /// because §13 does not change either; only the lens and the aperture move.
-    /// §13 *does* change the distance the viewport plane sits at -- from
-    /// `|lookfrom - lookat| = sqrt(12) = 3.4641...` to `focus_dist = 3.4`. The
+    /// The frame size and the aspect ratio are read off the `PINHOLE_*`
+    /// constants because this camera does not change either; only the lens and
+    /// the aperture move. It *does* change the distance the viewport plane sits
+    /// at -- from `|lookfrom - lookat| = sqrt(12) = 3.4641...` to
+    /// `focus_dist = 3.4`. The
     /// picture is unchanged by that, because every ray direction is `3.4` times
     /// what it was and only directions are ever normalised, but the aperture
     /// measured at the viewport is. See
     /// `the_effective_aperture_at_the_viewport_is_the_defocus_angle`.
-    pub fn chapter_thirteen() -> Self {
+    pub fn apertured() -> Self {
         Self::new(
-            CHAPTER_TWELVE_WIDTH,
-            CHAPTER_TWELVE_SAMPLES,
-            CHAPTER_TWELVE_DEPTH,
-            CHAPTER_TWELVE_ASPECT,
-            CHAPTER_THIRTEEN_VFOV,
-            CHAPTER_TWELVE_LOOKFROM,
-            CHAPTER_TWELVE_LOOKAT,
-            CHAPTER_TWELVE_VUP,
-            CHAPTER_THIRTEEN_DEFOCUS_ANGLE,
-            CHAPTER_THIRTEEN_FOCUS_DIST,
+            PINHOLE_WIDTH,
+            PINHOLE_SAMPLES,
+            PINHOLE_DEPTH,
+            PINHOLE_ASPECT,
+            APERTURED_VFOV,
+            PINHOLE_LOOKFROM,
+            PINHOLE_LOOKAT,
+            PINHOLE_VUP,
+            APERTURED_DEFOCUS_ANGLE,
+            APERTURED_FOCUS_DIST,
         )
     }
 
-    /// The §14 listing: the cover render's framing, at the cover render's own
-    /// size.
+    /// The cover render's framing, at the cover render's own size.
     ///
     /// 1200 wide at 500 samples, a 20-degree lens from (13, 2, 3) looking at the
     /// origin, behind a 0.6-degree aperture focused at 10. The viewport plane
     /// sits `focus_dist = 10` in front of the eye -- deliberately *not* the
     /// `|lookfrom - lookat| = sqrt(13^2 + 2^2 + 3^2) = sqrt(182) = 13.4907...`
-    /// that §12 would have used, which would have narrowed the lens to 0.4448
+    /// that the pinhole rule would have used, which would have narrowed the lens
+    /// to 0.4448
     /// degrees -- and the height follows from the aspect ratio as
     /// `1200 / (16/9) = 1200 * 9 / 16 = 675` exactly.
     ///
-    /// This is the *listing*, not what `--width` and `--samples` produce: the
-    /// renderer builds the same lens from `COVER_*` and the command line's
-    /// numbers, the way §13's camera is built rather than called. Rendering it
-    /// as written is 1200 * 675 * 500 = 405 million primary rays against a
+    /// This is the *canonical cover camera*, not what `--width` and `--samples`
+    /// produce: the renderer builds the same lens from `COVER_*` and the command
+    /// line's numbers, the way `apertured`'s camera is built rather than
+    /// called. Rendering it as written is 1200 * 675 * 500 = 405 million primary
+    /// rays against a
     /// world of roughly 488 spheres at up to 50 bounces each.
     pub fn cover() -> Self {
         Self::new(
@@ -328,22 +335,22 @@ impl Camera {
         )
     }
 
-    /// Cast one ray per sample through the viewport and shade it (§6, §7, §8).
+    /// Cast one ray per sample through the viewport and shade it.
     ///
     /// Every sample is a fresh jittered ray from `rng`, so the same generator
     /// state replays the same image and the test suite can assert on exact
     /// pixel values. `renderer::render_scene` owns the dimension check;
     /// `new` returns `Self`, not a `Result`.
     ///
-    /// §13 costs two more draws per sample, because a sample with an open
-    /// aperture also draws a point on the defocus disk. A pinned camera draws
-    /// none: `get_ray` short-circuits on `defocus_angle <= 0` before touching
+    /// An open aperture costs two more draws per sample, because a sample with
+    /// one also draws a point on the defocus disk. A pinned camera draws none:
+    /// `get_ray` short-circuits on `defocus_angle <= 0` before touching
     /// `rng`. That is what keeps the exact-pixel tests below exact, since they
     /// index the stream at two draws per sample.
     ///
-    /// Row `j` is written to image row `j`, unmirrored. §12 anchored the
-    /// viewport on `pixel00_loc`, the top-left, and gave the camera a downward
-    /// `pixel_delta_v`, so `j = 0` is already the top of the picture.
+    /// Row `j` is written to image row `j`, unmirrored. The viewport is anchored
+    /// on `pixel00_loc`, the top-left, and the camera's `pixel_delta_v` points
+    /// down, so `j = 0` is already the top of the picture.
     pub fn render(&self, world: &dyn Hittable, rng: &mut Rng) -> Result<Image, RenderError> {
         let mut image = Image::new(self.image_width, self.image_height)?;
 
@@ -373,14 +380,15 @@ impl Camera {
     /// `image_width - 1` instead would push the last row and column past the
     /// far edge -- pixel 7 of an 8-wide camera would reach `u = (7 + du) / 7`,
     /// which is at least 1 -- and would leave the first row and column a full
-    /// sample short of the near edge. The book makes the same choice.
+    /// sample short of the near edge.
     ///
-    /// `j` counts *down*. That is the whole of §12's orientation change and it
-    /// is why `render` no longer mirrors its write index.
+    /// `j` counts *down*. That is the whole of the orientation change described
+    /// on `Camera`, and it is why `render` no longer mirrors its write index.
     ///
-    /// §13 splits the ray's two ends apart. `pixel_sample` -- the point on the
-    /// viewport -- is unchanged, so the framing is unchanged. The *origin* is a
-    /// point on the defocus disk instead of `lookfrom`, and the direction runs
+    /// An aperture splits the ray's two ends apart. `pixel_sample` -- the point
+    /// on the viewport -- is unchanged, so the framing is unchanged. The
+    /// *origin* is a point on the defocus disk instead of `lookfrom`, and the
+    /// direction runs
     /// from there to `pixel_sample`. Rays that hit the same point on the
     /// viewport from different points on the lens are what make an
     /// out-of-focus surface spread.
@@ -401,7 +409,7 @@ impl Camera {
         Ray::new(ray_origin, pixel_sample - ray_origin)
     }
 
-    /// A random point on the defocus disk (§13).
+    /// A random point on the defocus disk.
     ///
     /// `Rng::in_unit_disk` rejects until it has a point strictly inside the
     /// unit disk, so `|p| < 1` and the sample is at most `defocus_radius` from
@@ -411,7 +419,7 @@ impl Camera {
         self.lookfrom + self.defocus_disk_u * p.x + self.defocus_disk_v * p.y
     }
 
-    /// Shade one ray: a hit bounces off its material, a miss is the sky (§9).
+    /// Shade one ray: a hit bounces off its material, a miss is the sky.
     ///
     /// `depth` counts the bounces still available, so a camera with none left
     /// renders black. Every bounce draws from `rng`, the same generator that
@@ -421,8 +429,8 @@ impl Camera {
             return Vec3::ZERO;
         }
 
-        // §9: a t_min of 0.001 skips the self-intersection that floating-point
-        // rounding introduces. This is the "shadow acne" the book fixes here.
+        // A t_min of 0.001 skips the self-intersection that floating-point
+        // rounding introduces. This is the "shadow acne" it prevents.
         if let Some(rec) = world.hit(ray, 0.001, f64::INFINITY) {
             if let Some((scattered, attenuation)) = rec.material.scatter(ray, &rec, rng) {
                 return attenuation * self.ray_color(&scattered, depth - 1, world, rng);
@@ -434,7 +442,7 @@ impl Camera {
     }
 }
 
-/// The sky: white at the horizon, blue overhead (§4).
+/// The sky: white at the horizon, blue overhead.
 fn sky_color(direction: Vec3) -> Vec3 {
     let unit_direction = direction.unit();
     let a = 0.5 * (unit_direction.y + 1.0);
@@ -450,12 +458,13 @@ mod tests {
     /// The seed the pixel-exact tests below are derived against.
     const SEED: u64 = 1;
 
-    /// A camera on the book's axis: eye at the origin, looking down -z, +y up,
+    /// A camera on the world axes: eye at the origin, looking down -z, +y up,
     /// a 90-degree lens.
     ///
     /// Every test that needs a closed form uses this one, because a frame
-    /// aligned with the world axes can be worked out on paper. §12's own
-    /// framing is tested through `Camera::chapter_twelve`, where the frame is
+    /// aligned with the world axes can be worked out on paper. The default
+    /// camera's own framing is tested through `Camera::pinhole`, where the
+    /// frame is
     /// oblique and only its invariants -- orthonormality, ordering -- survive
     /// without a render.
     ///
@@ -467,8 +476,9 @@ mod tests {
     /// viewport distance equalled `|lookfrom - lookat|` could not tell the two
     /// rules apart.
     ///
-    /// The aperture is pinned shut at 0.0, which §13 needs for two reasons: the
-    /// ray origin is then exactly `lookfrom`, so the directions below stay
+    /// The aperture is pinned shut at 0.0, which this test rig needs for two
+    /// reasons: the ray origin is then exactly `lookfrom`, so the directions
+    /// below stay
     /// closed-form, and `get_ray` draws nothing from `rng`, so a sample stays
     /// worth two draws and `first_draw` still indexes the stream.
     fn axis_camera(image_width: usize, samples: usize, depth: usize, aspect: f64) -> Camera {
@@ -486,8 +496,8 @@ mod tests {
         )
     }
 
-    /// The §6 world. `HittableList` borrows the objects, so the caller has to
-    /// hold them alive for as long as the list is used.
+    /// The spheres scene. `HittableList` borrows the objects, so the caller has
+    /// to hold them alive for as long as the list is used.
     fn test_world<'a>(objects: &'a [Box<dyn Hittable>]) -> HittableList<'a> {
         let mut list = HittableList::new();
         for object in objects {
@@ -499,25 +509,27 @@ mod tests {
     /// A world with nothing in it, so every ray misses and every sample costs
     /// exactly the two draws `render` makes before `get_ray`.
     ///
-    /// This is what keeps the pixel-exact tests below exact. §9 gave the
+    /// This is what keeps the pixel-exact tests below exact. Shading gives the
     /// generator a second job: a scattered ray draws from the same `Rng` that
     /// places the samples, and how many draws that costs depends on the path
-    /// the ray takes. Against the §6 scene, pixel (i, j)'s `du` is no longer at
-    /// a fixed offset into the stream, because every pixel ahead of it may have
+    /// the ray takes. Against the spheres scene, pixel (i, j)'s `du` is no longer
+    /// at a
+    /// fixed offset into the stream, because every pixel ahead of it may have
     /// spent a different number of draws. Against an empty world the
     /// arithmetic in `draw` and `first_draw` holds exactly.
     ///
-    /// §13 adds a third caller of the generator -- the defocus disk -- but only
+    /// An aperture adds a third caller of the generator -- the defocus disk --
+    /// but only
     /// for a camera with an open aperture, and `empty_world` is only ever
-    /// paired with `axis_camera`'s. So "two draws" survives §13 unchanged.
+    /// paired with `axis_camera`'s. So "two draws" survives it unchanged.
     fn empty_world() -> HittableList<'static> {
         HittableList::new()
     }
 
-    /// The book's normal colour map: each normal component maps from [-1, 1] to
-    /// [0, 1] (§6.1, unchanged through §7).
+    /// The original normal colour map: each normal component maps from [-1, 1] to
+    /// [0, 1].
     ///
-    /// §9 replaced this with `Material::scatter`, so nothing in the renderer
+    /// `Material::scatter` replaced this, so nothing in the renderer
     /// calls it any more. It stays here, in the tests, because the test below
     /// still pins what the map did.
     fn shade(normal: Vec3) -> Vec3 {
@@ -540,9 +552,9 @@ mod tests {
     /// column `i`, then sample, two draws per ray, `du` before `dv` -- so any
     /// one sample can be reproduced without rendering the whole image, as long
     /// as the world draws nothing of its own. Against `empty_world` that holds;
-    /// against the §6 scene it does not, because §9 spends extra draws per
-    /// scatter. It also only holds for a pinned camera: §13's disk draw would
-    /// make it four per ray.
+    /// against the spheres scene it does not, because shading spends extra draws
+    /// per scatter. It also only holds for a pinned camera: an open aperture's
+    /// disk draw would make it four per ray.
     fn draw(seed: u64, n: usize) -> f64 {
         let mut rng = Rng::seed_from_u64(seed);
         for _ in 0..n {
@@ -593,10 +605,10 @@ mod tests {
 
     #[test]
     fn height_follows_from_the_aspect_ratio() {
-        let camera = Camera::chapter_twelve();
+        let camera = Camera::pinhole();
         assert_eq!(camera.image_width, 400);
         // 400 / (16/9) = 225 exactly in f64 -- verified, not assumed -- and
-        // truncating it gives 225 rows for the book's 400x225 frame.
+        // truncating it gives 225 rows for the default 400x225 frame.
         assert_eq!(400.0_f64 / (16.0_f64 / 9.0), 225.0);
         assert_eq!(camera.image_height, 225);
     }
@@ -621,7 +633,7 @@ mod tests {
         //   u . v = (1/2)(1/sqrt(6)) + 0 + (1/2)(-1/sqrt(6)) = 0
         //   u . w = -(1/sqrt(6)) + 0 + (1/sqrt(6))         = 0
         //   v . w = -(1/sqrt(18)) + 2/sqrt(18) - 1/sqrt(18) = 0
-        let camera = Camera::chapter_twelve();
+        let camera = Camera::pinhole();
         let (u, v, w) = (camera.u, camera.v, camera.w);
 
         assert!((u.length() - 1.0).abs() < 1e-9, "u is not unit: {:?}", u);
@@ -651,8 +663,9 @@ mod tests {
     fn a_narrower_lens_shrinks_the_viewport() {
         // Both cameras are built with `focus_dist = 10`, so the viewport plane
         // sits 10 units in front of the eye -- *not* at the
-        // `|lookfrom - lookat| = sqrt(12) = 3.4641...` §12 would have used, and
-        // the two are deliberately different so that this test can tell the
+        // `|lookfrom - lookat| = sqrt(12) = 3.4641...` the pinhole rule would
+        // have used, and the two are deliberately different so that this test
+        // can tell the
         // rules apart. With
         //     viewport_height = 2 tan(vfov / 2) * focus_dist = 20 tan(vfov / 2)
         //     |pixel_delta_u| = viewport_width / image_width
@@ -690,7 +703,7 @@ mod tests {
         );
 
         // focus_dist, not |lookfrom - lookat|. `12.0_f64.sqrt()` here would be
-        // the §12 rule, and it is 2.8868x too small.
+        // the pinhole rule, and it is 2.8868x too small.
         let expected =
             |vfov: f64| 2.0 * (crate::degrees_to_radians(vfov) / 2.0).tan() * 10.0 / 225.0;
         assert!((wide.pixel_delta_u.length() - expected(90.0)).abs() < 1e-12);
@@ -700,13 +713,13 @@ mod tests {
             "a 20-degree lens should cover fewer pixels than a 90-degree one"
         );
 
-        // And explicitly *not* the §12 distance: sqrt(12) = 3.4641 against
+        // And explicitly *not* the pinhole distance: sqrt(12) = 3.4641 against
         // focus_dist = 10, so the two rules cannot both be satisfied.
-        let chapter_twelve_rule = |vfov: f64| {
+        let pinhole_rule = |vfov: f64| {
             2.0 * (crate::degrees_to_radians(vfov) / 2.0).tan() * 12.0_f64.sqrt() / 225.0
         };
         assert!(
-            (wide.pixel_delta_u.length() - chapter_twelve_rule(90.0)).abs() > 1e-6,
+            (wide.pixel_delta_u.length() - pinhole_rule(90.0)).abs() > 1e-6,
             "the viewport is still following |lookfrom - lookat|"
         );
     }
@@ -754,7 +767,7 @@ mod tests {
                         "sample for pixel ({i}, {j}) left the viewport in y: {dir:?}"
                     );
                     // Nothing in the frame tilts, so z is exactly the viewport
-                    // distance -- -10, not -1, because §13 puts the viewport at
+                    // distance -- -10, not -1, because the aperture puts the viewport at
                     // focus_dist rather than at |lookfrom - lookat|.
                     close(dir.z, -10.0);
                 }
@@ -785,7 +798,7 @@ mod tests {
         let x = |i: usize, du: f64| t * (-35.0 / 4.0 + (5.0 / 2.0) * (i as f64 + du));
         let y = |j: usize, dv: f64| t * (35.0 / 4.0 - (5.0 / 2.0) * (j as f64 + dv));
 
-        // §12 flips the frame: `viewport_v = viewport_height * -v` makes the row
+        // The frame is flipped: `viewport_v = viewport_height * -v` makes the row
         // step negative, so `j` counts down and the last row is the bottom.
         assert!(
             camera.pixel_delta_v.y < 0.0,
@@ -854,8 +867,8 @@ mod tests {
         let du = draw(SEED, n);
         let dv = draw(SEED, n + 1);
 
-        // §13's aperture is shut on this camera, so the generator `get_ray`
-        // takes is never read and the ray is still the §7 pinhole ray.
+        // The aperture is shut on this camera, so the generator `get_ray`
+        // takes is never read and the ray is still the plain pinhole ray.
         let mut rng = Rng::seed_from_u64(SEED);
 
         let t = (crate::degrees_to_radians(90.0) / 2.0).tan();
@@ -868,7 +881,7 @@ mod tests {
 
         // a = 0.5 * (unit.y + 1): blue is (1 - a) + a = 1, red gives up 0.5a
         // and green 0.3a. Pixel (0, 0) is the viewport's top-left square, so
-        // §12 writes it to image row 0 with no mirror.
+        // The top-left anchor writes it to image row 0 with no mirror.
         assert_eq!(
             Vec3::from_rgb(image.pixels[0]),
             sky_color(direction),
@@ -909,7 +922,7 @@ mod tests {
                         &mut Rng::seed_from_u64(SEED),
                     );
                 }
-                // Row `j`, not row `image_height - 1 - j`: §12 counts down.
+                // Row `j`, not row `image_height - 1 - j`: `j` counts down.
                 assert_vec_close(
                     Vec3::from_rgb(four.pixels[j * four.width + i]),
                     color / camera.samples_per_pixel as f64,
@@ -926,8 +939,8 @@ mod tests {
 
     #[test]
     fn antialiasing_still_separates_against_the_real_scene() {
-        // The averaging test above cannot use the §6 scene -- §9 spends extra
-        // draws per scatter and the stream stops being indexable -- so this
+        // The averaging test above cannot use the spheres scene -- shading spends
+        // extra draws per scatter and the stream stops being indexable -- so this
         // keeps the same comparison alive where the pixels actually come from
         // materials: the two renders must not coincide.
         let objects = scene::build(Scene::Spheres, &mut Rng::seed_from_u64(SEED));
@@ -1054,16 +1067,17 @@ mod tests {
         // 144 - 1.19 * 215.625 = -112.59375, and the metal ball is out on x as
         // above.
         //
-        // So this pixel's first material is the ground, whose albedo §11 made
-        // (0.8, 0.8, 0.0). That fixes two things exactly rather than by bound:
+        // So this pixel's first material is the ground, whose albedo the spheres
+        // scene gives it (0.8, 0.8, 0.0). That fixes two things exactly rather
+        // than by bound:
         //
         //   blue is exactly 0, because the attenuation multiplies through every
-        //     remaining bounce and 0 times anything is 0. §9's neutral 0.5
+        //     remaining bounce and 0 times anything is 0. The earlier neutral 0.5
         //     could not say that, which is why the sky-versus-ground split used
         //     to rest on a cap instead.
         //   red and green are at most 0.8, since 0.8 is the ground's own albedo
         //     and every albedo in the scene and every sky channel is <= 1. The
-        //     tightest downstream albedo is §11's own glass at 1.0, so the 0.8
+        //     tightest downstream albedo is the glass's own 1.0, so the 0.8
         //     here is the cap and not a bound on the chain.
         let bottom = image.pixels[7 * width];
         assert_eq!(
@@ -1105,7 +1119,7 @@ mod tests {
         // everywhere in this column (worked below). So column 0 sees only sky,
         // the middle ball and the ground.
         //
-        // The middle ball is the §11 listing's, at `(0, 0, -1.2)` with
+        // The middle ball's own, at `(0, 0, -1.2)` with
         // `r = 0.5`. For a ray `(X, Y, -10)`:
         //     oc = (0, 0, 1.2),  half_b = oc . d = -12,
         //     c = 1.2^2 - 0.5^2 = 1.44 - 0.25 = 1.19
@@ -1226,8 +1240,8 @@ mod tests {
             );
         }
 
-        // Rows 12-15 provably start on the ground, whose albedo §11 made
-        // (0.8, 0.8, 0.0): the ball is out on `X^2 + Y^2 >= 41.40625 >
+        // Rows 12-15 provably start on the ground, whose albedo the spheres scene
+        // gives it (0.8, 0.8, 0.0): the ball is out on `X^2 + Y^2 >= 41.40625 >
         // 21.008`, the glass and the bubble are out on the discriminants worked
         // above, and the metal is out on x. The ground's own root is real: its
         // `half_b^2` is at least `(100.5 * 5.625 + 10)^2 = 330984.47265625`
@@ -1278,7 +1292,7 @@ mod tests {
         // disk axes are the zero vector and every sample is `lookfrom`. The sum
         // is exact rather than merely close: `a + (+/-0.0) == a` for every
         // non-zero `a`, and `lookfrom` has no zero components.
-        let camera = Camera::chapter_twelve();
+        let camera = Camera::pinhole();
         assert_eq!(camera.defocus_angle, 0.0);
         assert_eq!(camera.focus_dist, 10.0);
 
@@ -1323,13 +1337,13 @@ mod tests {
             camera.defocus_disk_u.length()
         );
 
-        // The §13 listing's own radius, on the other end of the scale:
+        // `apertured`'s own radius, on the other end of the scale:
         //     3.4 * tan(5 deg) = 3.4 * 0.08748866352592401
         //                       = 0.29746145598814161
-        let thirteen = Camera::chapter_thirteen();
+        let thirteen = Camera::apertured();
         assert!(
             (thirteen.defocus_disk_u.length() - 0.29746145598814161).abs() < 1e-15,
-            "chapter_thirteen's radius was {}",
+            "apertured's radius was {}",
             thirteen.defocus_disk_u.length()
         );
     }
@@ -1361,9 +1375,10 @@ mod tests {
         //     2 atan(defocus_radius / viewport_distance)
         //
         // and that equals `defocus_angle` only when the viewport sits at
-        // `focus_dist`. §13 says it does; §12's `|lookfrom - lookat|` does not,
+        // `focus_dist`. An aperture does; the pinhole rule's
+        // `|lookfrom - lookat|` does not,
         // and the two are not interchangeable.
-        for camera in [Camera::cover(), Camera::chapter_thirteen()] {
+        for camera in [Camera::cover(), Camera::apertured()] {
             let distance = viewport_distance(&camera);
             close(distance, camera.focus_dist);
 
@@ -1385,7 +1400,7 @@ mod tests {
         close(viewport_distance(&cover), 10.0);
         close(cover.defocus_disk_u.length(), 0.052360356057001275);
 
-        // Under §12's rule the very same disk is read from a viewport at
+        // Under the pinhole rule the very same disk is read from a viewport at
         // `|lookfrom - lookat| = sqrt(13^2 + 2^2 + 3^2) = sqrt(182) =
         // 13.490737563232042`:
         //     2 atan(0.052360356057001275 / 13.490737563232042)
@@ -1397,15 +1412,15 @@ mod tests {
         // recovers.
         let focal = (cover.lookfrom - cover.lookat).length();
         close(focal, 182.0_f64.sqrt());
-        let under_section_twelve =
+        let under_pinhole_rule =
             (2.0 * (cover.defocus_disk_u.length() / focal).atan()).to_degrees();
         assert!(
-            (under_section_twelve - 0.44475142119273259).abs() < 1e-12,
-            "§12's viewport distance gives {under_section_twelve} degrees"
+            (under_pinhole_rule - 0.44475142119273259).abs() < 1e-12,
+            "the pinhole viewport distance gives {under_pinhole_rule} degrees"
         );
         assert!(
-            under_section_twelve < COVER_DEFOCUS_ANGLE * 0.75,
-            "the old rule narrowed the lens to {under_section_twelve} degrees"
+            under_pinhole_rule < COVER_DEFOCUS_ANGLE * 0.75,
+            "the old rule narrowed the lens to {under_pinhole_rule} degrees"
         );
     }
 
@@ -1417,7 +1432,7 @@ mod tests {
         // would rotate the lens's sampling pattern by a quarter turn and still
         // pass every radius assertion in this file, so the orientation is
         // pinned against the camera's own public frame instead.
-        let camera = Camera::chapter_thirteen();
+        let camera = Camera::apertured();
         let radius = 0.29746145598814161;
 
         assert_vec_close(camera.defocus_disk_u, camera.u * radius);
@@ -1456,7 +1471,7 @@ mod tests {
         // pixel leave from different points, so the pixel is an average over a
         // cone rather than a single ray. Reject `get_ray`'s return and compare
         // the origins directly.
-        let camera = Camera::chapter_thirteen();
+        let camera = Camera::apertured();
         let mut rng = Rng::seed_from_u64(SEED);
         let first = camera.get_ray(3, 3, 0.5, 0.5, &mut rng);
         let second = camera.get_ray(3, 3, 0.5, 0.5, &mut rng);
@@ -1471,8 +1486,8 @@ mod tests {
         // The endpoint is recomputed here rather than read off one of the two
         // rays, because `at(1.0)` is `origin + (endpoint - origin)` and that
         // is not the identity in f64: it agreed exactly while the viewport sat
-        // at `|lookfrom - lookat|`, and stopped agreeing once §13 moved it to
-        // `focus_dist`. Checking both rays against the pixel grid is a stronger
+        // at `|lookfrom - lookat|`, and stopped agreeing once the aperture moved it
+        // to `focus_dist`. Checking both rays against the pixel grid is a stronger
         // claim than checking that the two agree with each other.
         let endpoint = camera.pixel00_loc
             + camera.pixel_delta_u * (3.0 + 0.5)
@@ -1492,7 +1507,7 @@ mod tests {
         // strictly. `Rng::in_unit_disk` rejects while `p.length_squared() >= 1`,
         // which is what makes the inequality strict; a sampler that allowed the
         // rim would still satisfy the non-strict bound asserted here.
-        let camera = Camera::chapter_thirteen();
+        let camera = Camera::apertured();
         let mut rng = Rng::seed_from_u64(1);
         let center = camera.lookfrom;
         let mut max_distance = 0.0f64;

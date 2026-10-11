@@ -19,7 +19,7 @@ use crate::error::RenderError;
 ///   generous would not stop the abort it was meant to prevent.
 ///
 /// `1 << 24` = 16,777,216 pixels is 402.7 MB, and it covers every render worth
-/// committing: this project's largest is the §14 cover at 1200 x 675 = 810,000
+/// committing: this project's largest is the cover at 1200 x 675 = 810,000
 /// pixels (19.4 MB), and it reaches 4K-class frames -- 3840 x 2160 = 8,294,400
 /// and 4096 x 2160 = 8,847,360 -- while turning away 8K's 7680 x 4320 = 33,177,600.
 ///
@@ -59,7 +59,7 @@ impl Image {
 
     /// The gamma-encoded 8-bit RGB payload both encoders share.
     ///
-    /// `gamma` applies the sqrt encode from §9 to each linear component.
+    /// `gamma` applies the sqrt encode to each linear component.
     /// Components are clamped just under 1.0 before scaling, so a fully lit
     /// surface lands on 255 rather than wrapping to 0.
     pub fn to_rgb_bytes(&self, gamma: bool) -> Vec<u8> {
@@ -75,10 +75,9 @@ impl Image {
 
     /// Encode as binary PPM (P6).
     ///
-    /// The book's text writes P3, plain ASCII. P6 is the same format with a
-    /// binary payload: one quarter the size, and one `write` instead of
-    /// per-channel formatting. The book's own released `inOneWeekend` also
-    /// emits P6.
+    /// PPM has two payload encodings: P3, plain ASCII, and P6, binary. P6 is one
+    /// quarter the size, and one `write` instead of per-channel formatting, so
+    /// that is the one emitted here.
     pub fn write_ppm(&self, path: &Path, gamma: bool) -> Result<(), RenderError> {
         let header = format!("P6\n{} {}\n255\n", self.width, self.height);
         let mut bytes = header.into_bytes();
@@ -247,7 +246,7 @@ mod tests {
         assert!(Image::new(4096, 4096).is_ok());
         assert!(Image::new(4097, 4097).is_err());
 
-        // The §14 cover, the largest render this project makes, is 1200 x 675
+        // The cover render, the largest this project makes, is 1200 x 675
         // and must still go through untouched.
         let cover = Image::new(1200, 675).unwrap();
         assert_eq!(cover.pixels.len(), 810_000);

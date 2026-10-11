@@ -1,8 +1,9 @@
-//! `grazing-incidence` — a ray tracer built by porting *Ray Tracing in One
-//! Weekend* (v4.0.2) to Rust.
+//! `grazing-incidence` — a zero-dependency ray tracer: ray-sphere
+//! intersection, three materials, uniform multi-sample antialiasing, and a
+//! thin-lens defocus.
 //!
-//! `README.md` maps each module back to the chapter it came from; `AGENTS.md`
-//! records the invariants a change has to preserve.
+//! `README.md` describes what the renderer does and why; `AGENTS.md` records
+//! the invariants a change has to preserve.
 
 pub mod camera;
 pub mod cli;
@@ -19,7 +20,7 @@ pub mod scene;
 pub mod sphere;
 pub mod vec3;
 
-/// Pi, as used throughout the book.
+/// Pi, as used throughout the renderer.
 pub const PI: f64 = 3.1415926535897932385;
 
 pub fn degrees_to_radians(degrees: f64) -> f64 {
