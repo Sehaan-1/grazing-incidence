@@ -72,7 +72,7 @@ grazing-incidence/
 ├── docs/
 │   └── superpowers/specs/
 │       └── 2026-10-10-grazing-incidence-design.md
-├── images/                      # committed output, one file per chapter
+├── images/                      # committed output, one file per milestone
 └── src/
     ├── lib.rs                   # renderer modules
     ├── renderer.rs              # pixel loop + progress indicator
@@ -81,7 +81,8 @@ grazing-incidence/
 ```
 
 `images/` is deliberately **not** gitignored. Those files are the visual record
-of the progression.
+of the progression — see "Images are per milestone, not per chapter" below for
+what that turned out to mean.
 
 ## Module layout
 
@@ -193,6 +194,33 @@ Commit 0 carries placeholder `renderer.rs` and `scene.rs` modules so the crate
 compiles before chapter 2 replaces them. `images/` is created empty at commit 0
 and filled from commit 1 onward.
 
+### Images are per milestone, not per chapter
+
+The original version of this spec made step 3 of the per-chapter gate read "the
+chapter's image is rendered and committed to `images/`", and the layout comment
+above said "one file per chapter". **That was wrong and is amended here.**
+
+The renderer has exactly one scene graph, `Scene::Spheres`. Chapters 6, 7, 8,
+10, 11, 12 and 13 all render that same scene at the same 400×225, so a
+per-chapter image would have been thirteen files differing only in noise
+between them — a record of the build order, not of the renderer. Producing a
+genuinely different picture per chapter would require inventing per-chapter
+scenes, which is out of scope for a port.
+
+Decision 8's rationale stands unchanged: the hand-rolled PNG encoder exists so
+renders preview inline on GitHub. It is used, and the images are PNGs, which is
+the part of the decision that mattered. `images/` now holds:
+
+| File | What it is |
+|---|---|
+| `ch02-gradient.ppm` | §2's vertical gradient, the first image written |
+| `final-spheres.png` | the current renderer, 400×225 at 100 spp |
+| `cover-probe.png` | `cover` at 200×112 and 8 spp, evidence the cover path and the PNG encoder both work |
+
+The chapter-to-commit table above is accurate as written and is left alone; the
+"Rendered" column describes what each chapter's *code* changed, not a separate
+file in `images/`.
+
 ## Testing strategy
 
 `#[cfg(test)] mod tests` inside each module. No integration-test directory: the
@@ -262,15 +290,15 @@ from 4 onward is 16:9 at width 400, which the camera rounds to 400×225.
 | 14 (ours) | 400 × 225 | 16:9 | same image, PNG instead of PPM |
 | `cover` scene | 1200 × 675 | 16:9 | 500 spp, hours of CPU time |
 
-## Verification gate per chapter
+## Verification gate per milestone
 
 Before each commit:
 
 1. `cargo build` is clean (no warnings).
 2. `cargo test` is green.
-3. The chapter's image is rendered and committed to `images/`. Chapters 2–12
-   render to the hardcoded path `images/<chapter>.ppm`; from chapter 13 onward,
-   `cargo run --release -- --scene <name> --out images/<chapter>.png`.
+3. The render is regenerated and committed to `images/`, as a `.png` from
+   chapter 13 onward. This is per *milestone*, not per chapter — see "Images
+   are per milestone, not per chapter" above.
 4. The image is opened and inspected.
 
 Step 4 is a human check and is the point of the exercise; steps 1–3 are
