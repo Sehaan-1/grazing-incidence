@@ -284,7 +284,7 @@ def outro_card() -> Image.Image:
            "PCG32 · PPM · PNG · CRC-32 · Adler-32 · DEFLATE · arg parsing",
            font=f_small, fill=DIM, anchor="mm")
     d.text((FRAME_W // 2, cy + 38),
-           "every one written from scratch, because a ray tracer needs no crates",
+           "every one written from scratch: a ray tracer needs no crates",
            font=f_small, fill=DIM, anchor="mm")
     return canvas
 
