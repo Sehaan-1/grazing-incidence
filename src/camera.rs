@@ -989,8 +989,8 @@ mod tests {
             .unwrap();
         let width = image.width;
 
-        // Row 0 looks up: Y is in (25/4, 35/4]. All four spheres miss over that
-        // whole rectangle, whatever the draw.
+        // Row 0 looks up: Y is in (25/4, 35/4]. All *five* spheres miss over
+        // that whole rectangle, whatever the draw.
         //
         //   ground  half_b = 100.5 Y - 10 >= 100.5 * 6.25 - 10 = 618.125 and
         //           c = 101.25 > 0, so sqrtd < half_b and both roots in
@@ -1000,9 +1000,12 @@ mod tests {
         //           (d/dY = -3.5 Y < 0 over (6.25, 8.75]), so it is maximised
         //           at (X, Y) = (-35/4, 25/4):
         //           -57.421875 + 175 - 68.359375 - 75 = -25.78125 < 0.
-        //   blue    half_b = -10 and c = 0.75, so disc = 100 - 0.75 a with
-        //           a = X^2 + Y^2 + 100 > 39.0625 + 39.0625 + 100 = 278.125,
-        //           giving disc < 100 - 208.59375 = -108.59375 < 0.
+        //   bubble  same centre at r = 0.4, so c = 1.84 and
+        //           disc = -0.84 X^2 - 20 X - 1.84 Y^2 - 84, maximised at the
+        //           same corner at -45.1875 < 0.
+        //   blue    oc = (0, 0, 1.2), half_b = -12, c = 1.44 - 0.25 = 1.19, so
+        //           disc = 144 - 1.19 a with a = X^2 + Y^2 + 100 > 278.125,
+        //           giving disc < 144 - 331.16875 = -187.16875 < 0.
         //   metal   half_b = -X - 10 in (-3.75, -1.25], so half_b^2 <= 14.0625
         //           against 1.75 a >= 1.75 * 278.125 = 486.71875.
         //
@@ -1030,10 +1033,11 @@ mod tests {
         );
 
         // Row 7 looks down: Y is in (-45/4, -35/4] = (-11.25, -8.75], and the
-        // same four checks leave the ground as the only thing there to hit. The
+        // same five checks leave the ground as the only thing there to hit. The
         // glass's disc tops out at -91.40625 at (X, Y) = (-35/4, -35/4), the
-        // blue ball's at 100 - 0.75 (215.625) = -61.71875, and the metal ball
-        // is out on x as above.
+        // bubble's at -114.1875, the blue ball's at
+        // 144 - 1.19 * 215.625 = -112.59375, and the metal ball is out on x as
+        // above.
         //
         // So this pixel's first material is the ground, whose albedo §11 made
         // (0.8, 0.8, 0.0). That fixes two things exactly rather than by bound:
@@ -1080,23 +1084,62 @@ mod tests {
         //     X = -35/8 + (5/4) (i + du),   Y = 75/8 - (5/4) (j + dv).
         //
         // Column 0 puts X in [-35/8, -25/8) = [-4.375, -3.125), which is inside
-        // the middle ball's x range and outside both side balls: the glass is at
-        // x = -1 with r = 0.5 and needs x <= -0.4514 to be hit at all, and its
-        // disc at (x, y) = (-7/16, 0) is -0.01855469 < 0. So column 0 sees only
-        // sky, the middle ball and the ground, and the three occupy cleanly
-        // separated bands of rows:
+        // the middle ball's x range and far outside both side balls: the glass
+        // and its bubble are at x = -1 with radii 0.5 and 0.4 and need
+        // x <= -0.4514 to be hit at all, and their discs are negative
+        // everywhere in this column (worked below). So column 0 sees only sky,
+        // the middle ball and the ground.
         //
-        //   rows 0-2    Y in (45/8, 75/8] = (5.625, 9.375] -- above the ball
-        //   rows 5-9    |Y| <= 25/8 = 3.125          -- inside it (the ball's
-        //                                                  silhouette is
-        //                                                  |Y| <= 3.76732125 at
-        //                                                  X = -35/8 and at most
-        //                                                  4.85465838 at
-        //                                                  X = -25/8)
-        //   rows 12-15  |Y| >= 45/8 = 5.625          -- below it
+        // The middle ball is the §11 listing's, at `(0, 0, -1.2)` with
+        // `r = 0.5`. For a ray `(X, Y, -10)`:
+        //     oc = (0, 0, 1.2),  half_b = oc . d = -12,
+        //     c = 1.2^2 - 0.5^2 = 1.44 - 0.25 = 1.19
+        //     disc = 144 - 1.19 (X^2 + Y^2 + 100) >= 0
+        // so the ball is hit exactly when
+        //     X^2 + Y^2 <= (144 - 119) / 1.19 = 25 / 1.19 = 21.00840336...
+        // which at the column's two x edges gives the silhouette
+        //     |Y| <= 1.36666688 at X = -35/8      and
+        //     |Y| <= 3.35302526 at X = -25/8
+        // (moving the ball back to `z = -1` would give `c = 0.75`, `half_b = -10`
+        // and the budget `100 / 0.75 = 133.333`, i.e. `|Y| <= 3.76732125` and
+        // `4.85465838` -- the figures this test used to carry).
         //
-        // and rows 3, 4, 10 and 11 straddle a silhouette, so the jitter picks
-        // what they hit and all that survives is a range.
+        // The other four are out of this column for their own reasons, all with
+        // the direction `(X, Y, -10)`:
+        //
+        //   glass    oc = (1, 0, 1), c = 2 - 0.25 = 1.75, half_b = X - 10, so
+        //            disc = (X - 10)^2 - 1.75 a = -0.75 X^2 - 20 X - 1.75 Y^2 - 75.
+        //            It falls in X (d/dX = -1.5 X - 20 < 0 over the column) and
+        //            in Y, so on rows 0-3 its maximum is at
+        //            (X, Y) = (-35/8, 35/8): -35.3515625 < 0.
+        //   bubble   same centre, c = 2 - 0.4^2 = 1.84, so
+        //            disc = -0.84 X^2 - 20 X - 1.84 Y^2 - 84, maximised at the
+        //            same corner at -47.796875 < 0. The bubble is strictly inside
+        //            the shell (0.4 < 0.5), so nothing outside the shell can
+        //            reach it at all -- which is why it is invisible from this
+        //            column and invisible to the count test's neighbours.
+        //   metal    oc = (-1, 0, 1), half_b = -X - 10 in (-6.875, -5.625], so
+        //            half_b^2 <= 47.265625 against 1.75 a >= 225.5859375 (and
+        //            1.84 a >= 237.1875 for the bubble).
+        //   ground   half_b = 100.5 Y - 10 >= 100.5 * 4.375 - 10 = 429.6875 on
+        //            rows 0-3, with c = 101.25 > 0, so sqrtd < half_b and both
+        //            roots are negative.
+        //
+        // Row j covers `Y` in `(75/8 - (5/4)(j + 1), 75/8 - (5/4) j]`, and a row
+        // is only *provably* one thing if the whole rectangle gives the same
+        // answer. With the ball's budget of 21.008 the bands are:
+        //
+        //   rows 0-3    |Y| >= 35/8 = 4.375   -- above the ball; X^2 + Y^2 is at
+        //                                         least 9.765625 + 19.140625 =
+        //                                         28.90625 > 21.008
+        //   row 7       |Y| <= 5/8 = 0.625    -- inside it; X^2 + Y^2 is at most
+        //                                         19.140625 + 0.390625 =
+        //                                         19.53125 < 21.008
+        //   rows 12-15  |Y| >= 45/8 = 5.625   -- below it, same argument
+        //
+        // and rows 4, 5, 6, 8, 9, 10 and 11 straddle the silhouette, because
+        // `X^2` ranges over 9.765625..19.140625 and that is enough to flip the
+        // verdict inside a single row.
         let objects = scene::build(Scene::Spheres, &mut Rng::seed_from_u64(SEED));
         let world = test_world(&objects);
         let camera = axis_camera(8, 1, 5, 8.0 / 16.0);
@@ -1106,34 +1149,57 @@ mod tests {
         let width = image.width;
         assert_eq!((image.width, image.height), (8, 16));
 
-        // Rows 0-2 are sky whatever the draw. Over X in [-35/8, -25/8) and
-        // Y in (45/8, 75/8] the unit y runs from
-        // (45/8) / sqrt((35/8)^2 + (45/8)^2 + 100) = 5.625 / sqrt(150.78125)
-        //     = 5.625 / 12.27930103 = 0.45808750 to
-        // (75/8) / sqrt((25/8)^2 + (75/8)^2 + 100) = 9.375 / sqrt(197.65625)
-        //     = 9.375 / 14.05901914 = 0.66683135, so a runs
-        // [0.72904375, 0.83341568], red in [0.58329216, 0.63547816] and green
-        // in [0.74997530, 0.78128680].
-        for row in 0..=2 {
+        // Rows 0-3 are sky whatever the draw. Over X in [-35/8, -25/8) the unit
+        // y runs from `Y_lo / sqrt((35/8)^2 + Y_lo^2 + 100)` to
+        // `Y_hi / sqrt((25/8)^2 + Y_hi^2 + 100)` for that row's own Y band, so
+        // each row gets its own -- and much tighter -- sky bounds rather than
+        // one band for all four:
+        //
+        //   row 0  Y in (65/8, 75/8]  unit.y in (0.59710978, 0.66683134]
+        //   row 1  Y in (55/8, 65/8]  unit.y in (0.53295174, 0.61282588]
+        //   row 2  Y in (45/8, 55/8]  unit.y in (0.45808794, 0.54863013]
+        //   row 3  Y in (35/8, 45/8]  unit.y in (0.37204580, 0.47302950]
+        //
+        // With `a = 0.5 (unit.y + 1)`, red is `1 - 0.5a` and green is
+        // `1 - 0.3a`, giving
+        //
+        //   row 0  red in (0.58329217, 0.60072256]  green in (0.74997530, 0.76043353]
+        //   row 1  red in (0.59679353, 0.61676206]  green in (0.75807612, 0.77005724]
+        //   row 2  red in (0.61284247, 0.63547802]  green in (0.76770548, 0.78128681]
+        //   row 3  red in (0.63174263, 0.65698855]  green in (0.77904558, 0.79419313]
+        //
+        // The band widens monotonically down the frame, so a row that drifted
+        // into another row's territory would be caught by its own two numbers.
+        const SKY_ROWS: [(f64, f64, f64, f64); 4] = [
+            (0.5832, 0.6008, 0.7499, 0.7605),
+            (0.5967, 0.6168, 0.7580, 0.7701),
+            (0.6128, 0.6355, 0.7677, 0.7813),
+            (0.6317, 0.6570, 0.7790, 0.7942),
+        ];
+        for (row, &(r_lo, r_hi, g_lo, g_hi)) in SKY_ROWS.iter().enumerate() {
             let got = image.pixels[row * width];
             assert_eq!(got[2], 1.0, "row {row} should be sky, got {got:?}");
             assert!(
-                got[0] > 0.5832 && got[0] < 0.6356,
-                "row {row} red {got:?}, expected in (0.5832, 0.6356)"
+                got[0] > r_lo && got[0] < r_hi,
+                "row {row} red {got:?}, expected in ({r_lo}, {r_hi})"
             );
             assert!(
-                got[1] > 0.7499 && got[1] < 0.7814,
-                "row {row} green {got:?}, expected in (0.7499, 0.7814)"
+                got[1] > g_lo && got[1] < g_hi,
+                "row {row} green {got:?}, expected in ({g_lo}, {g_hi})"
             );
         }
 
-        // Rows 5-9 provably start on the middle ball, whose albedo is
-        // (0.1, 0.2, 0.5). Every later surface -- the glass at 1.0, the ground
-        // at 0.8, the metal at 0.8 and the sky at no more than 1 -- only
-        // multiplies, so the ball's own albedo caps the channel. This is the
-        // only surface in the frame with a red albedo below 0.8, which is what
-        // makes the cap tight rather than merely true.
-        for row in 5..=9 {
+        // Row 7 provably starts on the middle ball, whose albedo is
+        // (0.1, 0.2, 0.5). Every later surface -- the glass and the bubble at
+        // 1.0, the ground at 0.8, the metal at 0.8 and the sky at no more than
+        // 1 -- only multiplies, so the ball's own albedo caps the channel. This
+        // is the only surface in the frame with a red albedo below 0.8, which is
+        // what makes the cap tight rather than merely true.
+        //
+        // Only one row is provable, against five under the old `z = -1` ball:
+        // the budget shrank from 133.333 to 21.008, so the silhouette crossed
+        // inside rows 5, 6, 8 and 9 as well.
+        for row in 7..=7 {
             let got = image.pixels[row * width];
             assert!(
                 got[0] <= 0.1 && got[1] <= 0.2 && got[2] <= 0.5,
@@ -1146,9 +1212,14 @@ mod tests {
         }
 
         // Rows 12-15 provably start on the ground, whose albedo §11 made
-        // (0.8, 0.8, 0.0). Blue is 0.0 exactly, for the same reason the sky's
-        // is 1.0: the attenuation multiplies through and 0 * anything is 0.
-        // Red and green are capped by the ground's own 0.8.
+        // (0.8, 0.8, 0.0): the ball is out on `X^2 + Y^2 >= 41.40625 >
+        // 21.008`, the glass and the bubble are out on the discriminants worked
+        // above, and the metal is out on x. The ground's own root is real: its
+        // `half_b^2` is at least `(100.5 * 5.625 + 10)^2 = 330984.47265625`
+        // against `a c <= 232.03125 * 101.25 = 23493.1640625`. Blue is 0.0
+        // exactly, for the same reason the sky's is 1.0: the attenuation
+        // multiplies through and 0 * anything is 0. Red and green are capped by
+        // the ground's own 0.8.
         for row in 12..=15 {
             let got = image.pixels[row * width];
             assert_eq!(
@@ -1163,8 +1234,9 @@ mod tests {
             }
         }
 
-        // Rows 3, 4, 10 and 11 straddle a silhouette, so nothing is pinned.
-        for row in [3, 4, 10, 11] {
+        // Rows 4, 5, 6, 8, 9, 10 and 11 straddle the silhouette, so nothing is
+        // pinned there beyond being a real colour.
+        for row in [4, 5, 6, 8, 9, 10, 11] {
             let got = image.pixels[row * width];
             assert!(
                 got.iter().all(|c| c.is_finite() && *c >= 0.0 && *c <= 1.0),
