@@ -2,7 +2,7 @@
 
 use crate::camera::{CHAPTER_TWELVE_ASPECT, Camera};
 use crate::error::RenderError;
-use crate::scene::SCENE_NAMES;
+use crate::scene::Scene;
 
 /// Where renders go when `--out` is omitted.
 pub const DEFAULT_OUTPUT: &str = "images/rtiow.ppm";
@@ -17,7 +17,7 @@ pub struct Options {
     pub width: usize,
     pub samples_per_pixel: usize,
     pub seed: u64,
-    pub scene: String,
+    pub scene: Scene,
     pub out: String,
     pub help: bool,
 }
@@ -28,7 +28,7 @@ impl Default for Options {
             width: DEFAULT_WIDTH,
             samples_per_pixel: DEFAULT_SAMPLES,
             seed: DEFAULT_SEED,
-            scene: SCENE_NAMES[0].to_string(),
+            scene: Scene::Spheres,
             out: DEFAULT_OUTPUT.to_string(),
             help: false,
         }
@@ -54,10 +54,7 @@ impl Options {
                 }
                 "--scene" => {
                     let v = next_value(&mut args, "--scene")?;
-                    if !SCENE_NAMES.contains(&v.as_str()) {
-                        return Err(RenderError::UnknownScene { name: v });
-                    }
-                    opts.scene = v;
+                    opts.scene = Scene::parse(&v)?;
                 }
                 "--out" => {
                     opts.out = next_value(&mut args, "--out")?;
@@ -137,11 +134,15 @@ OPTIONS:
     --help, -h      Print this message
 
 Height is derived from a 16:9 aspect ratio, so --width 400 gives 400x225.
+Scenes: spheres, cover. The cover scene is the book's final image: 484
+randomly placed spheres. It is slow at the book's own 1200x500, so start
+smaller -- --scene cover --width 80 --samples 4 --out images/tmp.png.
 ";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::SCENE_NAMES;
 
     fn parse(args: &[&str]) -> Result<Options, RenderError> {
         Options::parse(args.iter().map(|s| s.to_string()))
@@ -153,7 +154,7 @@ mod tests {
         assert_eq!(opts.width, 400);
         assert_eq!(opts.samples_per_pixel, 100);
         assert_eq!(opts.seed, 0);
-        assert_eq!(opts.scene, "spheres");
+        assert_eq!(opts.scene, Scene::Spheres);
         assert_eq!(opts.out, "images/rtiow.ppm");
         assert!(!opts.help);
     }
@@ -167,7 +168,11 @@ mod tests {
         assert_eq!(Options::default().samples_per_pixel, DEFAULT_SAMPLES);
         assert_eq!(Options::default().seed, DEFAULT_SEED);
         assert_eq!(Options::default().out, DEFAULT_OUTPUT);
-        assert_eq!(Options::default().scene, SCENE_NAMES[0]);
+        // The default scene is the *first advertised name*, not a literal. That
+        // is what keeps `--scene`'s help text, `SCENE_NAMES` and the default
+        // from drifting apart when a scene is added or reordered.
+        assert_eq!(Options::default().scene, Scene::Spheres);
+        assert_eq!(Scene::parse(SCENE_NAMES[0]).unwrap(), Scene::Spheres);
         // The book really does say 400 wide at 100 samples.
         assert_eq!(DEFAULT_WIDTH, 400);
         assert_eq!(DEFAULT_SAMPLES, 100);
@@ -183,7 +188,7 @@ mod tests {
             "--seed",
             "7",
             "--scene",
-            "spheres",
+            "cover",
             "--out",
             "images/x.ppm",
         ])
@@ -191,7 +196,7 @@ mod tests {
         assert_eq!(opts.width, 800);
         assert_eq!(opts.samples_per_pixel, 16);
         assert_eq!(opts.seed, 7);
-        assert_eq!(opts.scene, "spheres");
+        assert_eq!(opts.scene, Scene::Cover);
         assert_eq!(opts.out, "images/x.ppm");
     }
 
@@ -216,7 +221,7 @@ mod tests {
     #[test]
     fn rejects_an_unknown_scene() {
         let err = parse(&["--scene", "nope"]).unwrap_err();
-        assert!(matches!(err, RenderError::UnknownScene { ref name } if name == "nope"));
+        assert!(matches!(err, RenderError::UnknownScene(ref name) if name == "nope"));
     }
 
     #[test]
@@ -287,8 +292,11 @@ mod tests {
     fn every_advertised_scene_name_parses() {
         for name in SCENE_NAMES {
             let opts = parse(&["--scene", name]).unwrap();
-            assert_eq!(&opts.scene, name);
+            assert_eq!(opts.scene, Scene::parse(name).unwrap());
         }
+        // The two names are the two scenes; a name that parsed to something
+        // unreachable from `Scene::parse` would not be caught by the loop above.
+        assert_eq!(SCENE_NAMES.len(), 2);
     }
 
     #[test]

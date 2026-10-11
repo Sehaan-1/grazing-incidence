@@ -26,6 +26,20 @@ pub const CHAPTER_THIRTEEN_VFOV: f64 = 20.0;
 pub const CHAPTER_THIRTEEN_DEFOCUS_ANGLE: f64 = 10.0;
 pub const CHAPTER_THIRTEEN_FOCUS_DIST: f64 = 3.4;
 
+/// §14's camera, split into constants for the same reason §12's were: the
+/// renderer builds a cover camera from the command line's width and sample
+/// count and has to read the rest of the framing off one place.
+pub const COVER_WIDTH: usize = 1200;
+pub const COVER_SAMPLES: usize = 500;
+pub const COVER_DEPTH: usize = 50;
+pub const COVER_ASPECT: f64 = 16.0 / 9.0;
+pub const COVER_VFOV: f64 = 20.0;
+pub const COVER_LOOKFROM: Vec3 = Vec3::new(13.0, 2.0, 3.0);
+pub const COVER_LOOKAT: Vec3 = Vec3::ZERO;
+pub const COVER_VUP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
+pub const COVER_DEFOCUS_ANGLE: f64 = 0.6;
+pub const COVER_FOCUS_DIST: f64 = 10.0;
+
 /// A camera: a pinhole from §7, positioned and aimed from §12, given a
 /// lens aperture in §13.
 ///
@@ -238,6 +252,35 @@ impl Camera {
             CHAPTER_TWELVE_VUP,
             CHAPTER_THIRTEEN_DEFOCUS_ANGLE,
             CHAPTER_THIRTEEN_FOCUS_DIST,
+        )
+    }
+
+    /// The §14 listing: the cover render's framing, at the cover render's own
+    /// size.
+    ///
+    /// 1200 wide at 500 samples, a 20-degree lens from (13, 2, 3) looking at the
+    /// origin, behind a 0.6-degree aperture focused at 10. The focal length is
+    /// `|lookfrom - lookat| = sqrt(13^2 + 2^2 + 3^2) = sqrt(182) = 13.4907...`,
+    /// and the height follows from the aspect ratio as
+    /// `1200 / (16/9) = 1200 * 9 / 16 = 675` exactly.
+    ///
+    /// This is the *listing*, not what `--width` and `--samples` produce: the
+    /// renderer builds the same lens from `COVER_*` and the command line's
+    /// numbers, the way §13's camera is built rather than called. Rendering it
+    /// as written is 1200 * 675 * 500 = 405 million primary rays against a
+    /// world of roughly 488 spheres at up to 50 bounces each.
+    pub fn cover() -> Self {
+        Self::new(
+            COVER_WIDTH,
+            COVER_SAMPLES,
+            COVER_DEPTH,
+            COVER_ASPECT,
+            COVER_VFOV,
+            COVER_LOOKFROM,
+            COVER_LOOKAT,
+            COVER_VUP,
+            COVER_DEFOCUS_ANGLE,
+            COVER_FOCUS_DIST,
         )
     }
 
@@ -484,7 +527,7 @@ mod tests {
 
     #[test]
     fn render_produces_the_requested_pixel_count() {
-        let objects = scene::build(Scene::Spheres);
+        let objects = scene::build(Scene::Spheres, &mut Rng::seed_from_u64(SEED));
         let world = test_world(&objects);
         // 20 / (20/12) = 12 exactly, so the height comes back as asked for.
         let camera = axis_camera(20, 1, 2, 20.0 / 12.0);
@@ -791,7 +834,7 @@ mod tests {
         // draws per scatter and the stream stops being indexable -- so this
         // keeps the same comparison alive where the pixels actually come from
         // materials: the two renders must not coincide.
-        let objects = scene::build(Scene::Spheres);
+        let objects = scene::build(Scene::Spheres, &mut Rng::seed_from_u64(SEED));
         let world = test_world(&objects);
 
         let mut rng = Rng::seed_from_u64(SEED);
@@ -804,7 +847,7 @@ mod tests {
 
     #[test]
     fn max_depth_zero_yields_black() {
-        let objects = scene::build(Scene::Spheres);
+        let objects = scene::build(Scene::Spheres, &mut Rng::seed_from_u64(SEED));
         let world = test_world(&objects);
         let camera = axis_camera(8, 1, 0, 8.0 / 5.0);
         let image = camera
@@ -851,7 +894,7 @@ mod tests {
         //   row 0  y in (5/8, 7/8]   -- looking up
         //   row 7  y in [-9/8, -7/8) -- looking down
         // `t` is one ulp under 1, so the bounds below are rounded outwards.
-        let objects = scene::build(Scene::Spheres);
+        let objects = scene::build(Scene::Spheres, &mut Rng::seed_from_u64(SEED));
         let world = test_world(&objects);
         let camera = axis_camera(8, 1, 5, 1.0);
         let image = camera
@@ -952,7 +995,7 @@ mod tests {
         //
         // and rows 3, 4, 10 and 11 straddle a silhouette, so the jitter picks
         // what they hit and all that survives is a range.
-        let objects = scene::build(Scene::Spheres);
+        let objects = scene::build(Scene::Spheres, &mut Rng::seed_from_u64(SEED));
         let world = test_world(&objects);
         let camera = axis_camera(8, 1, 5, 8.0 / 16.0);
         let image = camera
