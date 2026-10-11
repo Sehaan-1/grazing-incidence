@@ -113,7 +113,8 @@ BEATS = [
      ["--width", "400", "--height", "225"], 2.0),
 
     ("57e3400", "03", "One sphere",
-     "Ray-sphere as a quadratic. The book's own example solves to t = 10.5, exactly.",
+     "Ray-sphere as a quadratic. The test's worked example hits at exactly "
+     "t = 10.5.",
      ["--width", "400", "--height", "225"], 2.2),
 
     ("cbf77ad", "04", "Surface normals, many objects",
