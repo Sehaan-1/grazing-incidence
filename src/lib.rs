@@ -1,8 +1,8 @@
 //! `grazing-incidence` — a ray tracer built by porting *Ray Tracing in One
 //! Weekend* (v4.0.2) to Rust.
 //!
-//! Modules appear as their chapters land; see `docs/superpowers/specs/` for the
-//! chapter-to-commit mapping.
+//! `README.md` maps each module back to the chapter it came from; `AGENTS.md`
+//! records the invariants a change has to preserve.
 
 pub mod camera;
 pub mod cli;

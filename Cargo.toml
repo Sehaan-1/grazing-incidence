@@ -7,7 +7,9 @@ description = "A ray tracer built by porting Ray Tracing in One Weekend to Rust"
 license = "MIT"
 
 [dependencies]
-# Intentionally empty. See docs/superpowers/specs/ for the rationale.
+# Intentionally empty, and it stays that way. Every algorithm this crate needs
+# -- the PRNG, the PPM and PNG encoders, argument parsing, error types -- is
+# written here rather than pulled in. See README.md.
 
 [profile.release]
 opt-level = 3

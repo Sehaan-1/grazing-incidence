@@ -23,8 +23,31 @@ All 15 commits are in, and the renderer runs.
 | Dependencies | none, by design |
 | Scenes | `spheres` (§6–§13), `cover` (§14) |
 
-See [`docs/superpowers/specs/`](docs/superpowers/specs/) for the full design
-and the chapter-to-commit mapping.
+### Chapter → commit
+
+The book has 14 numbered chapters; 1 ("Overview") and 14 ("Where Next?") are
+prose. Twelve are code, and the last is ours. Each row is one commit in `git log`,
+gated on a clean build, a green suite, and a render.
+
+| Commit | Book chapter | Lands | Visible change |
+|---|---|---|---|
+| 1 | §2 Output an Image | `image` (P6 PPM), `renderer` | the vertical gradient |
+| 2 | §3 The vec3 Class | `vec3` | none — arithmetic only |
+| 3 | §4 Rays, Camera, Background | `ray` | sky gradient |
+| 4 | §5 Adding a Sphere | `sphere` | one sphere on sky |
+| 5 | §6 Normals, Multiple Objects | `hittable`, `interval` | ground plus two balls |
+| 6 | §7 Camera Into Its Own Class | `camera` | none — pure refactor |
+| 7 | §8 Antialiasing | `rng` | smoothed silhouettes |
+| 8 | §9 Diffuse Materials | `Material::Lambertian` | soft shadows, gamma on |
+| 9 | §10 Metal | `Material::Metal` | fuzzy reflections |
+| 10 | §11 Dielectrics | `Material::Dielectric` | refracting glass |
+| 11 | §12 Positionable Camera | camera rewrite | reframed |
+| 12 | §13 Defocus Blur | camera aperture | out-of-focus background |
+| 13 | — (ours) PNG Output | `image` (deflate), `png` | same image, `.png` |
+| 14 | §14 cover scene | `Scene::Cover` | the field of random spheres |
+
+Commits 2 and 6 render identically to their predecessor by design — isolating the
+refactor from any visual change is what makes them reviewable at all.
 
 ## What the renderer does
 
@@ -80,6 +103,38 @@ published and replaces its C++ idioms with their Rust equivalents:
 There are **no crate dependencies**. Everything — PRNG, PPM and PNG encoding,
 argument parsing, error types — is written from scratch.
 
+## Design decisions
+
+The ones where a reasonable person might have chosen differently:
+
+| Decision | Why |
+|---|---|
+| **One evolving program, one commit per chapter** | Mirrors how the book actually teaches — one program that grows. Avoids the thirteen dead binaries a per-chapter-layout would leave behind. Git already provides replayability. |
+| **Zero dependencies** | A ray tracer needs no crates, and hand-rolling is the most educational option available. |
+| **Deterministic by default** | A fixed seed, overridable with `--seed`, so identical code yields byte-identical images. A diff in `images/` always means a real change. |
+| **P6 PPM, not the book's P3** | Same image, a quarter of the size: binary, one `write` instead of ~270,000 formatted numbers. The book's own released `inOneWeekend` also emits P6. |
+| **Unit tests on the mathematics** | Not golden images. The book has no stable output to pin, and golden PPMs would break under any refactor. Committed images are visual artifacts, not fixtures. |
+| **`Material` as an enum, `Hittable` as a trait** | Replaces the book's `shared_ptr` hierarchy and its boolean-plus-out-parameter `hit`, which is its most error-prone idiom. `scatter` returns `Option<(Ray, Color)>` from the first commit that has materials, so chapter 10's metal does not force a breaking signature change. |
+| **Right-side-up images, unlike the book's chapters 4–6** | See below. |
+
+### On the orientation
+
+The book's chapters 4–6 render **upside-down**. Its camera anchors on the
+*bottom*-left corner of the viewport and counts `j` upward, while PPM writes the
+first row as the *top* — so the bottom of the viewport lands in the image's top
+row. The book fixes this at chapter 12 by switching the anchor to `pixel00_loc`.
+
+This port does not wait: it mirrors the write index, so every image is right-side-up
+from chapter 4, and the mirror comes out when chapter 12 switches anchors. The
+deviation is deliberate and documented in `AGENTS.md`.
+
+## Not in scope
+
+- *The Next Week* (quads, textures, transforms, lights, motion blur) and Book 3.
+- Parallel or multithreaded rendering.
+- A reusable general-purpose renderer library.
+- Redistributing the book's text, code or images.
+
 ## Building
 
 Requires a Rust toolchain (stable). No build system beyond Cargo.
@@ -107,7 +162,7 @@ rustup-init.exe --default-host x86_64-pc-windows-gnu --default-toolchain stable
 | `src/scene.rs` | named scenes |
 | `src/png.rs` | the hand-rolled DEFLATE and PNG encoder |
 | `images/` | committed renders — one per milestone, not one per chapter |
-| `docs/superpowers/specs/` | design documents |
+| `AGENTS.md` | working agreement for coding agents: invariants, traps, the gate |
 
 ### A note on `images/`
 
