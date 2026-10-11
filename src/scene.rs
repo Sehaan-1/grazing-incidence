@@ -45,24 +45,51 @@ pub fn build(scene: Scene, rng: &mut Rng) -> Vec<Box<dyn Hittable>> {
 }
 
 /// The book's §6 world, with §9's Lambertian ball, §10's metal ball and §11's
-/// glass ball sharing it. The ground sphere's top surface sits at
-/// -100.5 + 100 = -0.5, below the eye at the origin; an earlier ground at
-/// (0, -1000, 0) with r = 1000 put that surface exactly at y = 0, so the camera
-/// sat on it and no ray ever reached the sky.
+/// glass ball and its hollow glass bubble sharing it. The ground sphere's top
+/// surface sits at -100.5 + 100 = -0.5, below the eye at the origin; an earlier
+/// ground at (0, -1000, 0) with r = 1000 put that surface exactly at y = 0, so
+/// the camera sat on it and no ray ever reached the sky.
+///
+/// This is the listing's *shape* with the listing's own ground moved down half a
+/// unit, and the two differences are both deliberate and both visible in the
+/// image:
+///
+///   - the middle ball is at `(0, 0, -1.2)`, not `(0, 0, -1)`. Every other ball
+///     sits at `z = -1`, so at `z = -1` the metal ball on the right lines up
+///     exactly behind the matte one and hides it. `§11`'s Listing 79 is where
+///     this first matters; the original §6 listing had no ball there at all.
+///   - there is a second, *smaller* glass sphere concentric with the left one:
+///     `(-1, 0, -1)` with `r = 0.4` and index `1.0 / 1.5`. It is a hollow
+///     bubble -- air inside glass inside air -- and it is the chapter's whole
+///     point: rays refract twice on the way in (1 -> 0.667 -> 1) and twice on
+///     the way back out, so the scene bends around it.
+///
+/// Both matter to the renders and to the row-band arithmetic in
+/// `camera::tests::a_column_reads_sky_then_ball_then_ground`, which is written
+/// against this geometry.
 fn build_spheres() -> Vec<Box<dyn Hittable>> {
     let ground = Sphere::new(
         Vec3::new(0.0, -100.5, -1.0),
         100.0,
         Material::lambertian(Vec3::new(0.8, 0.8, 0.0)),
     );
-    // The book's order: glass on the left, matte in the middle, metal on the
-    // right, all radius 0.5 at z = -1. The glass refracts what is behind it,
-    // which is what puts the middle ball's image inside the left one.
-    let left = Sphere::new(Vec3::new(-1.0, 0.0, -1.0), 0.5, Material::dielectric(1.5));
+    // The book's order: ground, the matte ball, the left glass shell, the
+    // bubble inside it, and the metal ball on the right. Order does not matter
+    // -- `HittableList` takes the closest hit -- but matching the listing makes
+    // the five reads against the listing checkable line by line.
     let middle = Sphere::new(
-        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(0.0, 0.0, -1.2),
         0.5,
         Material::lambertian(Vec3::new(0.1, 0.2, 0.5)),
+    );
+    let left = Sphere::new(Vec3::new(-1.0, 0.0, -1.0), 0.5, Material::dielectric(1.5));
+    // `1.0 / 1.50` is the listing's own reciprocal, not a typo: the bubble is
+    // glass-within-glass, so entering it divides by 1.5 exactly as leaving the
+    // shell does, and the net effect on a ray crossing both is nothing.
+    let bubble = Sphere::new(
+        Vec3::new(-1.0, 0.0, -1.0),
+        0.4,
+        Material::dielectric(1.0 / 1.5),
     );
     let right = Sphere::new(
         Vec3::new(1.0, 0.0, -1.0),
@@ -71,8 +98,9 @@ fn build_spheres() -> Vec<Box<dyn Hittable>> {
     );
     vec![
         Box::new(ground),
-        Box::new(left),
         Box::new(middle),
+        Box::new(left),
+        Box::new(bubble),
         Box::new(right),
     ]
 }
@@ -231,8 +259,114 @@ mod tests {
     }
 
     #[test]
-    fn spheres_scene_contains_four_objects() {
-        assert_eq!(build(Scene::Spheres, &mut Rng::seed_from_u64(0)).len(), 4);
+    fn spheres_scene_contains_five_objects() {
+        // The ground, the matte ball, the left glass shell, the bubble inside
+        // it and the metal ball. The count *is* the assertion: the bubble is
+        // invisible to any probe that only looks at the outside of the left
+        // ball, and its omission from an earlier version of this scene cost a
+        // whole feature -- the hollow-glass render -- while every other test
+        // stayed green. Five, because §11's Listing 79 has five spheres.
+        assert_eq!(build(Scene::Spheres, &mut Rng::seed_from_u64(0)).len(), 5);
+    }
+
+    /// The listing's own geometry, read back through rays rather than off the
+    /// trait objects: a matte ball at `z = -1.2` and a bubble of radius 0.4
+    /// inside the left glass shell.
+    ///
+    /// `build` hands back `Box<dyn Hittable>`, so the only handle on the
+    /// geometry is a probe -- which is also the better test, because a probe
+    /// cannot be satisfied by a comment.
+    ///
+    /// **The matte ball's `z`.** A ray dropped down the ball's own axis from
+    /// `(0, 2, -1.2)` meets it at `t = 2 - 0.5 = 1.5`: the ball's top is at
+    /// `y = 0.5` whichever way round the image plane it faces, so the axis is
+    /// what pins the depth. Put the ball back at `z = -1` and the same ray
+    /// misses its centre by 0.2, so it meets the surface where
+    /// `(2 - t)^2 + 0.2^2 = 0.25`, i.e.
+    ///     t = 2 - sqrt(0.25 - 0.04) = 2 - sqrt(0.21)
+    ///       = 2 - 0.458257569495584 = 1.541742430504416,
+    /// which is 0.0417 away from 1.5 and fails a 1e-9 tolerance. The ground
+    /// answers at `t = 2.5` in both cases -- it is `(0, -100.5, -1)` with
+    /// `r = 100`, so its surface is at `y = -0.5002` under `z = -1.2` and
+    /// `y = -0.5` under `z = -1`, both well below the ball's top at `y = 0.5`
+    /// -- so it never masks the ball.
+    ///
+    /// **The bubble.** The shell and the bubble are concentric at `(-1, 0, -1)`
+    /// with radii 0.5 and 0.4, so no ray from outside can tell them apart: it
+    /// always meets the shell first. The probe starts at the shared centre,
+    /// *inside* the bubble, and looks down. `Sphere::hit` rejects the near root
+    /// against `t_min` and keeps the far one, so the bubble answers at exactly
+    /// its own radius, `t = 0.4`, while the shell answers at `0.5`. Without the
+    /// bubble the answer is the shell at 0.5 with `ior = 1.5`; with it the
+    /// answer is 0.4 with `ior = 1.0 / 1.5`. The two are 0.1 apart and have
+    /// different materials, so the probe fails on either if the bubble is
+    /// dropped.
+    ///
+    /// The centre of the left ball is outside the ground: it is
+    /// `sqrt(1 + 100.5^2) = 100.5074611946998` from `(0, -100.5, -1)`, which
+    /// has radius 100.
+    #[test]
+    fn the_matte_ball_is_at_minus_one_point_two_with_a_hollow_bubble_inside_the_glass() {
+        let objects = build(Scene::Spheres, &mut Rng::seed_from_u64(0));
+        let mut world = HittableList::new();
+        for o in &objects {
+            world.add(o.as_ref());
+        }
+
+        let down_the_axis = Ray::new(Vec3::new(0.0, 2.0, -1.2), Vec3::new(0.0, -1.0, 0.0));
+        let ball = world
+            .hit(&down_the_axis, 0.001, f64::INFINITY)
+            .expect("the matte ball at (0, 0, -1.2)");
+        assert!(
+            (ball.t - 1.5).abs() < 1e-9,
+            "the matte ball answered at t = {}, not 1.5 -- is it at z = -1.2?",
+            ball.t
+        );
+        assert_eq!(
+            ball.material,
+            Material::lambertian(Vec3::new(0.1, 0.2, 0.5))
+        );
+
+        // And the reading the old position would have given, so the tolerance
+        // above is not carrying the argument by itself.
+        let at_minus_one = Ray::new(Vec3::new(0.0, 2.0, -1.0), Vec3::new(0.0, -1.0, 0.0));
+        let off_axis = world
+            .hit(&at_minus_one, 0.001, f64::INFINITY)
+            .expect("the same ball, probed 0.2 off its axis");
+        assert!(
+            (off_axis.t - (2.0 - 0.21_f64.sqrt())).abs() < 1e-9,
+            "expected {}, got {}",
+            2.0 - 0.21_f64.sqrt(),
+            off_axis.t
+        );
+        assert!(
+            (off_axis.t - 1.5).abs() > 1e-3,
+            "probing at z = -1 must NOT give the same answer as probing at z = -1.2"
+        );
+
+        let straight_down = Ray::new(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(0.0, -1.0, 0.0));
+        let bubble = world
+            .hit(&straight_down, 0.001, f64::INFINITY)
+            .expect("the bubble at (-1, 0, -1)");
+        assert!(
+            (bubble.t - 0.4).abs() < 1e-9,
+            "the bubble answered at t = {}, not 0.4",
+            bubble.t
+        );
+        assert_eq!(bubble.material, Material::dielectric(1.0 / 1.5));
+
+        // The same ray with `t_min` past the bubble reaches the shell, which is
+        // what makes the 0.4 above a reading of the bubble rather than of
+        // whichever glass sphere happens to be inner.
+        let shell = world
+            .hit(&straight_down, 0.401, f64::INFINITY)
+            .expect("the glass shell, from inside the bubble");
+        assert!(
+            (shell.t - 0.5).abs() < 1e-9,
+            "the shell answered at t = {}, not 0.5",
+            shell.t
+        );
+        assert_eq!(shell.material, Material::dielectric(1.5));
     }
 
     #[test]
@@ -274,13 +408,15 @@ mod tests {
         }
 
         // A ray straight down from above the middle ball must hit that ball, not
-        // the ground. The ball at (0,0,-1) r=0.5 puts the surface at t = 2 - 0.5
-        // = 1.5 along this ray; the ground at (0,-100.5,-1) r=100 is far enough
-        // below that its surface is at t = 102.5 - 100 = 2.5. The two outer
-        // balls are 1.0 away from the ray's own line in x, outside their radius
-        // of 0.5, so neither can answer. `HittableList` takes the closest of what
-        // is left, so this pins which sphere did.
-        let ray = Ray::new(Vec3::new(0.0, 2.0, -1.0), Vec3::new(0.0, -1.0, 0.0));
+        // the ground. The ball at (0, 0, -1.2) with r = 0.5 puts its surface at
+        // t = 2 - 0.5 = 1.5 along this ray; the ground at (0, -100.5, -1) with
+        // r = 100 is far enough below that its surface is at
+        // t = 102.5 - sqrt(102.5^2 - 506.29) = 102.5 - 99.9998 = 2.5002. The
+        // two outer balls are 1.0 away from the ray's own line in x, outside
+        // their radius of 0.5, so neither can answer, and the bubble is inside
+        // the left one. `HittableList` takes the closest of what is left, so
+        // this pins which sphere did.
+        let ray = Ray::new(Vec3::new(0.0, 2.0, -1.2), Vec3::new(0.0, -1.0, 0.0));
         let rec = world.hit(&ray, 0.001, f64::INFINITY).unwrap();
         assert!(
             (rec.t - 1.5).abs() < 1e-9,
