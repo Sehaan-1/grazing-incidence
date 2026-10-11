@@ -19,7 +19,7 @@ All 15 commits are in, and the renderer runs.
 | | |
 |---|---|
 | Chapters landed | 15 of 15 |
-| Tests | 166, all passing |
+| Tests | 173, all passing |
 | Dependencies | none, by design |
 | Scenes | `spheres` (§6–§13), `cover` (§14) |
 
