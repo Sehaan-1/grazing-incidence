@@ -45,6 +45,18 @@ a render you have actually looked at. Read it top to bottom as the build order.
 Two commits render identically to their predecessor by design. Isolating a
 refactor from any visual change is what makes it reviewable at all.
 
+### The progression
+
+![Ten milestones of the renderer, from a two-channel gradient to a scene of 484 random spheres](images/progression.gif)
+
+*Every frame is a real render, produced by checking out the commit that
+introduced the feature and running that commit's own binary. Nothing here is
+reconstructed or restyled.*
+
+`python scripts/make-progression.py` regenerates it. The script that builds it
+doubles as the narration — each beat's caption is the claim that milestone
+makes, written to be read at 400 pixels wide.
+
 ## What the renderer does
 
 One evolving program, built bottom-up:
