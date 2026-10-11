@@ -256,11 +256,13 @@ impl Camera {
     /// `focus_dist = 3.4` sits just inside the middle ball, which §11 moved to
     /// `(0, 0, -1.2)`:
     ///
-    ///     to the left glass ball  = |(-1,0,-1) - (-2,2,1)| = sqrt(1 + 4 + 4) = 3
-    ///     to the middle ball     = |(0,0,-1.2) - (-2,2,1)|
-    ///                           = sqrt(4 + 4 + 4.84) = sqrt(12.84) = 3.58329562
-    ///     to the right metal ball = |(1,0,-1) - (-2,2,1)| = sqrt(9 + 4 + 4) = sqrt(17)
-    ///                           = 4.12310563
+    /// ```text
+    /// to the left glass ball  = |(-1,0,-1) - (-2,2,1)| = sqrt(1 + 4 + 4)   = 3
+    /// to the middle ball     = |(0,0,-1.2) - (-2,2,1)| = sqrt(4 + 4 + 4.84)
+    ///                                                     = sqrt(12.84)     = 3.58329562
+    /// to the right metal ball = |(1,0,-1) - (-2,2,1)|  = sqrt(9 + 4 + 4)
+    ///                                                     = sqrt(17)        = 4.12310563
+    /// ```
     ///
     /// so the middle ball is the one that stays sharp and the two outer ones
     /// smear, while the ground running away to the horizon -- infinitely far, in

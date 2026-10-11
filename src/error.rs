@@ -3,6 +3,10 @@ use std::fmt;
 /// Everything that can go wrong during a render.
 #[derive(Debug)]
 pub enum RenderError {
+    /// Dimensions the renderer will not allocate. Three things land here: an
+    /// axis below 2, a `width * height` that overflows `usize`, and a product
+    /// above `image::MAX_PIXELS`. All three are "asked for more image than a
+    /// render can hold", so they share a variant and a message.
     InvalidDimension {
         width: usize,
         height: usize,
@@ -28,7 +32,9 @@ impl fmt::Display for RenderError {
         match self {
             Self::InvalidDimension { width, height } => write!(
                 f,
-                "invalid image dimensions {width}x{height}: both must be at least 2"
+                "invalid image dimensions {width}x{height}: each axis must be at least 2 \
+                 and the product must be at most {} pixels",
+                crate::image::MAX_PIXELS
             ),
             Self::MissingValue { flag } => write!(f, "{flag} requires a value"),
             Self::InvalidParameter { flag, value } => {

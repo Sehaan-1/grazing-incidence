@@ -271,6 +271,12 @@ grazing-incidence [--width N] [--height N] [--samples N] [--seed N]
   samples**. This is many hours of CPU time and is never produced by default.
 - Unknown flags are a hard error, never silently ignored.
 - Invalid dimensions or a non-positive sample count return `Err`, exit non-zero.
+  "Invalid" covers three things: an axis below 2, a `width * height` that
+  overflows `usize`, and a product above `image::MAX_PIXELS` (`1 << 24` =
+  16,777,216 pixels = 402.7 MB of `f64`). The first two used to abort --
+  `--width 4000000000` panicked with `capacity overflow` and exit 101, against
+  this contract. Capping the product also bounds each axis below `u32::MAX`,
+  which closes the silent `width as u32` on the PNG path.
 - `--out` infers the encoder from the extension: `.ppm` → PPM, `.png` → PNG.
   Requesting `.png` before chapter 14 has landed returns `Err`, because the PNG
   encoder does not exist yet.

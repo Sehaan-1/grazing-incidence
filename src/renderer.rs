@@ -164,6 +164,27 @@ mod tests {
         ));
     }
 
+    /// The reachable panic, end to end. `--width 4000000000` used to abort
+    /// with `capacity overflow` (exit 101) inside `Image::new`; the spec says an
+    /// invalid dimension returns `Err` and exits non-zero.
+    ///
+    /// `4e9 / (16/9) = 2.25e9` rows, so the product is 9e18 pixels. That fits in
+    /// a 64-bit `usize` (max 1.8446744e19), so nothing overflows -- it is
+    /// `Image::new`'s `MAX_PIXELS` cap that turns it into an `Err`. Taken to
+    /// the point where `usize` itself would overflow, `--width 9223372036854775807`
+    /// gives 5.19e18 rows and a product of 4.79e37, and `checked_mul` catches
+    /// that instead.
+    #[test]
+    fn rejects_a_width_whose_pixel_count_overflows_or_exceeds_the_cap() {
+        for width in [4_000_000_000usize, 9_223_372_036_854_775_807] {
+            let err = render_scene(&small(width, 2, DEFAULT_SEED)).unwrap_err();
+            assert!(
+                matches!(err, RenderError::InvalidDimension { .. }),
+                "width {width} should have been refused, got {err:?}"
+            );
+        }
+    }
+
     #[test]
     fn accepts_the_smallest_size_the_guard_allows() {
         // 4 / (16/9) = 2.25 truncates to 2.

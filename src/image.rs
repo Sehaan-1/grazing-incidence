@@ -4,6 +4,29 @@ use std::path::Path;
 
 use crate::error::RenderError;
 
+/// The largest image this renderer will allocate, in pixels.
+///
+/// Every image is a `Vec<[f64; 3]>`, so the buffer is `pixels * 24` bytes. The
+/// cap exists for two separate reasons and both have to hold:
+///
+/// - **The multiply.** `width * height` is computed on `usize`. `--width
+///   4000000000` at the derived 16:9 height gives `4e9 * 2250000000`, which
+///   overflows and panics with `capacity overflow` -- an abort, not an `Err`.
+///   `checked_mul` turns that into the `InvalidDimension` the CLI contract
+///   promises.
+/// - **The allocation.** Even where the product fits, it does not mean the
+///   memory does. `1 << 28` pixels would be 6.4 GB of `f64`, so a cap that
+///   generous would not stop the abort it was meant to prevent.
+///
+/// `1 << 24` = 16,777,216 pixels is 402.7 MB, and it covers every render worth
+/// committing: this project's largest is the §14 cover at 1200 x 675 = 810,000
+/// pixels (19.4 MB), and it reaches 4K-class frames -- 3840 x 2160 = 8,294,400
+/// and 4096 x 2160 = 8,847,360 -- while turning away 8K's 7680 x 4320 = 33,177,600.
+///
+/// It also closes the `width as u32` on the PNG path: both axes are below
+/// `2^24 < u32::MAX`, so `encode_rgb`'s dimensions cannot silently truncate.
+pub const MAX_PIXELS: usize = 1 << 24;
+
 /// A linear-light RGB image. Pixels are stored row-major, top row first.
 #[derive(Debug, Clone)]
 pub struct Image {
@@ -17,10 +40,16 @@ impl Image {
         if width == 0 || height == 0 {
             return Err(RenderError::InvalidDimension { width, height });
         }
+        let count = width
+            .checked_mul(height)
+            .ok_or(RenderError::InvalidDimension { width, height })?;
+        if count > MAX_PIXELS {
+            return Err(RenderError::InvalidDimension { width, height });
+        }
         Ok(Self {
             width,
             height,
-            pixels: vec![[0.0; 3]; width * height],
+            pixels: vec![[0.0; 3]; count],
         })
     }
 
@@ -60,9 +89,23 @@ impl Image {
 
     /// Encode as PNG. Same pixels as `write_ppm`, roughly a twentieth of the
     /// size, and previewable on GitHub.
+    ///
+    /// The dimensions go to `png::encode_rgb` as `u32`, which is where a
+    /// `usize` wider than 32 bits would truncate silently and write a file whose
+    /// header disagrees with its own payload. `new` already bounds both axes
+    /// below `u32::MAX`, but `width` and `height` are public, so this converts
+    /// rather than trusting that.
     pub fn write_png(&self, path: &Path, gamma: bool) -> Result<(), RenderError> {
+        let width = u32::try_from(self.width).map_err(|_| RenderError::InvalidDimension {
+            width: self.width,
+            height: self.height,
+        })?;
+        let height = u32::try_from(self.height).map_err(|_| RenderError::InvalidDimension {
+            width: self.width,
+            height: self.height,
+        })?;
         let rgb = self.to_rgb_bytes(gamma);
-        let png = crate::png::encode_rgb(self.width as u32, self.height as u32, &rgb);
+        let png = crate::png::encode_rgb(width, height, &rgb);
         std::fs::write(path, png)?;
         Ok(())
     }
@@ -156,5 +199,72 @@ mod tests {
         assert_eq!(body, &[128, 128, 128]);
 
         std::fs::remove_file(&path).unwrap();
+    }
+
+    /// The reachable panic this guards. `width * height` used to be evaluated
+    /// and then handed straight to `vec!`, so any product that overflowed
+    /// `usize` aborted with `capacity overflow` instead of returning `Err` --
+    /// exit 101, not the non-zero exit the spec promises.
+    ///
+    /// `usize::MAX / 4 * 4` is the largest multiple of 4 below `usize::MAX`;
+    /// one more and it wraps. On this host `usize` is 64 bits, so
+    /// `usize::MAX = 18446744073709551615` and `usize::MAX / 4 = 4611686018427387903`,
+    /// which times 4 is `18446744073709551612`, exactly `usize::MAX - 3`.
+    #[test]
+    fn new_rejects_a_pixel_count_that_overflows_usize() {
+        let err = Image::new(usize::MAX / 4 + 1, 4).unwrap_err();
+        assert!(matches!(
+            err,
+            RenderError::InvalidDimension {
+                width: _,
+                height: 4
+            }
+        ));
+
+        // And the real one from the command line: `--width 4000000000` at the
+        // 16:9 height 2250000000 gives 9e18, which is inside `usize` on a
+        // 64-bit host -- so this case is caught by the cap, not the overflow,
+        // and it must still be an `Err`.
+        let err = Image::new(4_000_000_000, 2_250_000_000).unwrap_err();
+        assert!(matches!(
+            err,
+            RenderError::InvalidDimension {
+                width: 4_000_000_000,
+                height: 2_250_000_000
+            }
+        ));
+    }
+
+    #[test]
+    fn new_rejects_more_pixels_than_the_cap_allows() {
+        // `2^24` is the cap, `2^24 + 1` the smallest product over it. Both fit
+        // in `usize` comfortably, so only the cap can reject these.
+        assert!(Image::new(MAX_PIXELS / 16, 16).is_ok());
+        assert!(Image::new(MAX_PIXELS / 16, 17).is_err());
+
+        // A square over it: 4097 x 4097 = 16,785,409 > 16,777,216.
+        assert_eq!(4096 * 4096, MAX_PIXELS);
+        assert!(Image::new(4096, 4096).is_ok());
+        assert!(Image::new(4097, 4097).is_err());
+
+        // The §14 cover, the largest render this project makes, is 1200 x 675
+        // and must still go through untouched.
+        let cover = Image::new(1200, 675).unwrap();
+        assert_eq!(cover.pixels.len(), 810_000);
+        assert!(810_000 < MAX_PIXELS);
+    }
+
+    /// `write_png` narrows the dimensions to `u32`. `new` bounds them well
+    /// below that, but the fields are public, so a caller can put one back.
+    /// Before this was checked, `width as u32` truncated silently and the file's
+    /// IHDR disagreed with its own IDAT payload.
+    #[test]
+    fn write_png_refuses_dimensions_wider_than_a_u32() {
+        let mut img = Image::new(2, 2).unwrap();
+        img.width = u32::MAX as usize + 1;
+        let err = img
+            .write_png(&temp("gi_test_toowide.png"), false)
+            .unwrap_err();
+        assert!(matches!(err, RenderError::InvalidDimension { .. }));
     }
 }
