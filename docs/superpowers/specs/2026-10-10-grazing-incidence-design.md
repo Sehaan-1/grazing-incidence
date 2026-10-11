@@ -277,9 +277,13 @@ grazing-incidence [--width N] [--height N] [--samples N] [--seed N]
   `--width 4000000000` panicked with `capacity overflow` and exit 101, against
   this contract. Capping the product also bounds each axis below `u32::MAX`,
   which closes the silent `width as u32` on the PNG path.
-- `--out` infers the encoder from the extension: `.ppm` → PPM, `.png` → PNG.
-  Requesting `.png` before chapter 14 has landed returns `Err`, because the PNG
-  encoder does not exist yet.
+- `--out` infers the encoder from the extension: `.ppm` → PPM, `.png` → PNG,
+  matched case-insensitively. **Any other extension — including none at all —
+  is an error.** An earlier version asked only "is this `.png`?" and fell back
+  to PPM for everything else, so `--out x.txt` wrote a *binary* P6 file under a
+  name that promises text and the program still reported success. Requesting
+  `.png` before chapter 14 has landed returns `Err`, because the PNG encoder
+  does not exist yet.
 - `--scene` accepts only scene names defined in `scene.rs`; an unknown name is
   an error listing the valid names.
 

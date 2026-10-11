@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use grazing_incidence::cli::{self, Options};
+use grazing_incidence::cli::{self, Encoder, Options};
 use grazing_incidence::error::RenderError;
 use grazing_incidence::renderer;
 
@@ -29,22 +29,23 @@ fn run(opts: &Options) -> Result<(), RenderError> {
     let image = renderer::render_scene(opts)?;
 
     let path = Path::new(&opts.out);
+
+    // The extension picks the encoder, and only two extensions are known.
+    // Anything else used to fall through to PPM, so `--out x.txt` wrote a
+    // binary PPM under a name that promises text -- a silent mislabelling
+    // rather than a mistake the caller could see. `cli::encoder_for` now
+    // refuses it.
+    let encoder = cli::encoder_for(path)?;
+
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
             std::fs::create_dir_all(dir)?;
         }
     }
 
-    // The extension picks the encoder: `.png` gets the compressed one,
-    // anything else the PPM that has always been there.
-    let is_png = path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("png"));
-
-    if is_png {
-        image.write_png(path, renderer::GAMMA)?;
-    } else {
-        image.write_ppm(path, renderer::GAMMA)?;
+    match encoder {
+        Encoder::Png => image.write_png(path, renderer::GAMMA)?,
+        Encoder::Ppm => image.write_ppm(path, renderer::GAMMA)?,
     }
 
     println!("wrote {}", path.display());

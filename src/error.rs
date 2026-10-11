@@ -14,6 +14,9 @@ pub enum RenderError {
     MissingValue {
         flag: String,
     },
+    /// A value the flag will not take. Each call site says what it expected:
+    /// `--width wide` fails on the parse, `--width -4` on the type, and
+    /// `--out x.txt` because the encoder comes from the extension.
     InvalidParameter {
         flag: String,
         value: String,
@@ -38,10 +41,7 @@ impl fmt::Display for RenderError {
             ),
             Self::MissingValue { flag } => write!(f, "{flag} requires a value"),
             Self::InvalidParameter { flag, value } => {
-                write!(
-                    f,
-                    "invalid value for {flag}: {value} is not a positive integer"
-                )
+                write!(f, "invalid value for {flag}: {value}")
             }
             Self::UnknownFlag { flag } => write!(f, "unknown option: {flag}"),
             Self::UnknownScene(name) => write!(
