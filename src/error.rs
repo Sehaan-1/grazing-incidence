@@ -3,11 +3,23 @@ use std::fmt;
 /// Everything that can go wrong during a render.
 #[derive(Debug)]
 pub enum RenderError {
-    InvalidDimension { width: usize, height: usize },
-    MissingValue { flag: String },
-    InvalidParameter { flag: String, value: String },
-    UnknownFlag { flag: String },
-    UnknownScene { name: String },
+    InvalidDimension {
+        width: usize,
+        height: usize,
+    },
+    MissingValue {
+        flag: String,
+    },
+    InvalidParameter {
+        flag: String,
+        value: String,
+    },
+    UnknownFlag {
+        flag: String,
+    },
+    /// A `--scene` name that resolves to nothing. The name is all there is to
+    /// say; `Display` prints the valid ones alongside it.
+    UnknownScene(String),
     Io(std::io::Error),
 }
 
@@ -26,7 +38,7 @@ impl fmt::Display for RenderError {
                 )
             }
             Self::UnknownFlag { flag } => write!(f, "unknown option: {flag}"),
-            Self::UnknownScene { name } => write!(
+            Self::UnknownScene(name) => write!(
                 f,
                 "unknown scene: {name} (valid: {})",
                 crate::scene::SCENE_NAMES.join(", ")
@@ -44,7 +56,7 @@ impl std::error::Error for RenderError {
             | Self::MissingValue { .. }
             | Self::InvalidParameter { .. }
             | Self::UnknownFlag { .. }
-            | Self::UnknownScene { .. } => None,
+            | Self::UnknownScene(_) => None,
         }
     }
 }

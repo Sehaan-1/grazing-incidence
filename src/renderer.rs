@@ -3,7 +3,8 @@
 use crate::camera::{
     CHAPTER_THIRTEEN_DEFOCUS_ANGLE, CHAPTER_THIRTEEN_FOCUS_DIST, CHAPTER_THIRTEEN_VFOV,
     CHAPTER_TWELVE_ASPECT, CHAPTER_TWELVE_DEPTH, CHAPTER_TWELVE_LOOKAT, CHAPTER_TWELVE_LOOKFROM,
-    CHAPTER_TWELVE_VUP, Camera,
+    CHAPTER_TWELVE_VUP, COVER_ASPECT, COVER_DEFOCUS_ANGLE, COVER_DEPTH, COVER_FOCUS_DIST,
+    COVER_LOOKAT, COVER_LOOKFROM, COVER_VFOV, COVER_VUP, Camera,
 };
 use crate::cli::Options;
 use crate::error::RenderError;
@@ -15,38 +16,68 @@ use crate::scene::{self, Scene};
 /// Whether to apply the sqrt gamma encode when writing pixels (§9).
 pub const GAMMA: bool = true;
 
-/// Cast `opts.samples_per_pixel` jittered rays per pixel through the §13
-/// camera and shade each hit (§6, §8, §12, §13).
+/// The camera for a scene, at the size the command line asked for.
 ///
-/// The lens is the book's §13 listing -- a 20-degree lens from (-2, 2, 1)
-/// looking at (0, 0, -1), behind a 10-degree aperture focused at 3.4 -- while
-/// the width, the sample count, the seed and the scene come from the command
-/// line. §12 is what makes the width the only dimension a caller has to give:
-/// the height follows from the 16:9 aspect ratio. §13 is what makes the
-/// background soft: rays leave from across the lens rather than from one point,
-/// so anything off the plane of focus spreads over a cone instead of resolving
-/// to a single pixel.
+/// §13 hardcodes 400 wide at 100 samples and §14 hardcodes 1200 at 500, but the
+/// command line owns both numbers -- §12 is what made the width the only
+/// dimension a caller has to give. So the scene picks the *lens* and the caller
+/// picks the size, and the named constructors (`Camera::chapter_twelve`,
+/// `Camera::chapter_thirteen`, `Camera::cover`) are what pin the sizes the book
+/// actually used.
 ///
-/// `Camera::chapter_thirteen` hardcodes the same lens but also hardcodes 400
-/// wide at 100 samples. This has to honour `--width` and `--samples`, so it
-/// reads the §13 constants directly rather than calling that constructor.
-pub fn render_scene(opts: &Options) -> Result<Image, RenderError> {
-    let scene = Scene::from_name(&opts.scene).ok_or_else(|| RenderError::UnknownScene {
-        name: opts.scene.clone(),
-    })?;
+/// `Camera::cover` is deliberately *not* called here. It returns a camera
+/// hardwired to 1200x675 at 500 samples, which would ignore `--width` and
+/// `--samples` entirely and turn `--scene cover --width 80 --samples 4` into
+/// the full 405-million-ray render.
+fn camera_for(scene: Scene, width: usize, samples_per_pixel: usize) -> Camera {
+    match scene {
+        Scene::Spheres => Camera::new(
+            width,
+            samples_per_pixel,
+            CHAPTER_TWELVE_DEPTH,
+            CHAPTER_TWELVE_ASPECT,
+            CHAPTER_THIRTEEN_VFOV,
+            CHAPTER_TWELVE_LOOKFROM,
+            CHAPTER_TWELVE_LOOKAT,
+            CHAPTER_TWELVE_VUP,
+            CHAPTER_THIRTEEN_DEFOCUS_ANGLE,
+            CHAPTER_THIRTEEN_FOCUS_DIST,
+        ),
+        Scene::Cover => Camera::new(
+            width,
+            samples_per_pixel,
+            COVER_DEPTH,
+            COVER_ASPECT,
+            COVER_VFOV,
+            COVER_LOOKFROM,
+            COVER_LOOKAT,
+            COVER_VUP,
+            COVER_DEFOCUS_ANGLE,
+            COVER_FOCUS_DIST,
+        ),
+    }
+}
 
-    let camera = Camera::new(
-        opts.width,
-        opts.samples_per_pixel,
-        CHAPTER_TWELVE_DEPTH,
-        CHAPTER_TWELVE_ASPECT,
-        CHAPTER_THIRTEEN_VFOV,
-        CHAPTER_TWELVE_LOOKFROM,
-        CHAPTER_TWELVE_LOOKAT,
-        CHAPTER_TWELVE_VUP,
-        CHAPTER_THIRTEEN_DEFOCUS_ANGLE,
-        CHAPTER_THIRTEEN_FOCUS_DIST,
-    );
+/// Cast `opts.samples_per_pixel` jittered rays per pixel through the scene's
+/// camera and shade each hit (§6, §8, §12, §13, §14).
+///
+/// The scene chooses the lens -- §13's 20-degree lens from (-2, 2, 1) focused at
+/// 3.4, or §14's from (13, 2, 3) focused at 10 -- while the width, the sample
+/// count, the seed and the scene itself come from the command line. §12 is what
+/// makes the width the only dimension a caller has to give: the height follows
+/// from the 16:9 aspect ratio.
+///
+/// **Scene construction and the render share one generator.** The cover scene
+/// draws from `rng` to place its 484 spheres, and the render then draws from
+/// where it left off. That is deliberate: it means one seed fixes both the
+/// layout and the image, so the cover is reproducible end to end. A separate
+/// generator would be reproducible too, but it would mean the sphere layout and
+/// the samples were each replayed independently, and the image you get back
+/// would no longer be the one a given `--seed` names on its own.
+pub fn render_scene(opts: &Options) -> Result<Image, RenderError> {
+    let mut rng = Rng::seed_from_u64(opts.seed);
+
+    let camera = camera_for(opts.scene, opts.width, opts.samples_per_pixel);
 
     // Both axes are still held to 2, even though only the width is a parameter
     // now: the height follows from the aspect ratio, and 2/(16/9) = 1.125
@@ -63,13 +94,12 @@ pub fn render_scene(opts: &Options) -> Result<Image, RenderError> {
         });
     }
 
-    let objects = scene::build(scene);
+    let objects = scene::build(opts.scene, &mut rng);
     let mut world = HittableList::new();
     for object in &objects {
         world.add(object.as_ref());
     }
 
-    let mut rng = Rng::seed_from_u64(opts.seed);
     camera.render(&world, &mut rng)
 }
 
@@ -91,6 +121,20 @@ mod tests {
             ..Options::default()
         }
     }
+
+    /// A small render of one named scene.
+    fn small_scene(scene: Scene, width: usize, samples: usize, seed: u64) -> Options {
+        Options {
+            scene,
+            ..small(width, samples, seed)
+        }
+    }
+
+    /// Small enough that a cover render at this size is milliseconds even
+    /// unoptimized: 8x4 is 32 pixels and 1 sample each, against a world of
+    /// roughly 488 spheres rather than 4.
+    const COVER_TEST_WIDTH: usize = 8;
+    const COVER_TEST_SAMPLES: usize = 1;
 
     #[test]
     fn rejects_one_pixel_wide() {
@@ -140,18 +184,72 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_scene_is_rejected_here_too() {
-        // The CLI already refuses these, so this only fires if `Options` is
-        // built by hand -- but then the renderer must not fall back to a
-        // default scene without saying so.
-        let opts = Options {
-            scene: "nope".to_string(),
-            ..small(4, 2, DEFAULT_SEED)
-        };
-        assert!(matches!(
-            render_scene(&opts).unwrap_err(),
-            RenderError::UnknownScene { ref name } if name == "nope"
-        ));
+    fn an_unknown_scene_never_reaches_the_renderer() {
+        // `Options::scene` is a `Scene`, not a `String`, so a name the CLI would
+        // have refused cannot be built here at all. That is the whole of the
+        // guarantee this used to make by re-checking the name at render time,
+        // and it is why the renderer no longer carries that check: the type
+        // makes the error unrepresentable rather than merely unlikely.
+        assert!(Scene::parse("nope").is_err());
+    }
+
+    #[test]
+    fn the_cover_scene_renders_through_the_same_path() {
+        // Proves the §14 wiring end to end at a size that costs nothing: the
+        // scene builds, the cover lens is used, and pixels come out finite and
+        // in range. 8 / (16/9) = 4.5 truncates to 4, so this is 8x4 = 32 pixels.
+        let image = render_scene(&small_scene(
+            Scene::Cover,
+            COVER_TEST_WIDTH,
+            COVER_TEST_SAMPLES,
+            DEFAULT_SEED,
+        ))
+        .unwrap();
+        assert_eq!((image.width, image.height), (8, 4));
+        assert_eq!(image.pixels.len(), 32);
+        assert!(
+            image
+                .pixels
+                .iter()
+                .flatten()
+                .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
+            "every cover channel should be finite and inside [0, 1]"
+        );
+        // And the cover is not the §6 scene wearing a new name: a field of
+        // matte spheres has no blue in it and plenty of it, so at least one
+        // pixel is off-black.
+        assert!(
+            image.pixels.iter().any(|p| *p != [0.0, 0.0, 0.0]),
+            "a cover render of 32 pixels should not be entirely black"
+        );
+    }
+
+    #[test]
+    fn the_cover_scene_honours_the_command_lines_width_and_samples() {
+        // `Camera::cover` is the listing's own 1200x675 at 500. Calling it from
+        // `render_scene` would ignore `--width` and `--samples` outright, and
+        // this test is what says it does not: 20 wide is 20x11 --
+        // 20 / (16/9) = 11.25 truncates to 11 -- at 2 samples.
+        let image = render_scene(&small_scene(Scene::Cover, 20, 2, DEFAULT_SEED)).unwrap();
+        assert_eq!((image.width, image.height), (20, 11));
+    }
+
+    #[test]
+    fn the_cover_scene_is_reproducible_from_its_seed() {
+        // The cover draws from the shared generator *before* the render does, so
+        // this asserts more than the §6 test above: the same seed has to
+        // reproduce the sphere layout and the sampling together. Two different
+        // seeds have to move the pixels, which is what says the layout really is
+        // seed-driven and not merely fixed.
+        let a = render_scene(&small_scene(Scene::Cover, 8, 1, DEFAULT_SEED)).unwrap();
+        let b = render_scene(&small_scene(Scene::Cover, 8, 1, DEFAULT_SEED)).unwrap();
+        assert_eq!(a.pixels, b.pixels, "one seed must give one cover image");
+
+        let c = render_scene(&small_scene(Scene::Cover, 8, 1, DEFAULT_SEED + 1)).unwrap();
+        assert_ne!(
+            a.pixels, c.pixels,
+            "a different seed must move the cover, or the layout is not seed-driven"
+        );
     }
 
     #[test]
