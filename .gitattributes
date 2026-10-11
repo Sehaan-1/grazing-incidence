@@ -4,3 +4,4 @@
 # Binary renders must never be line-ending translated.
 *.ppm binary
 *.png binary
+*.gif binary
