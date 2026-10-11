@@ -253,11 +253,24 @@ impl Camera {
     /// The §13 listing: the same eye and target as §12, but a 20-degree lens
     /// behind a 10-degree aperture focused at 3.4.
     ///
-    /// `focus_dist = 3.4` is almost the `3.4641...` from the eye to the middle
-    /// ball, so the three spheres sit on the plane of focus and the ground
-    /// running away to the horizon -- infinitely far, in the limit -- does not.
-    /// That is the whole of the chapter's image: a wide lens close to the
-    /// subject blurs everything behind it.
+    /// `focus_dist = 3.4` sits just inside the middle ball, which §11 moved to
+    /// `(0, 0, -1.2)`:
+    ///
+    ///     to the left glass ball  = |(-1,0,-1) - (-2,2,1)| = sqrt(1 + 4 + 4) = 3
+    ///     to the middle ball     = |(0,0,-1.2) - (-2,2,1)|
+    ///                           = sqrt(4 + 4 + 4.84) = sqrt(12.84) = 3.58329562
+    ///     to the right metal ball = |(1,0,-1) - (-2,2,1)| = sqrt(9 + 4 + 4) = sqrt(17)
+    ///                           = 4.12310563
+    ///
+    /// so the middle ball is the one that stays sharp and the two outer ones
+    /// smear, while the ground running away to the horizon -- infinitely far, in
+    /// the limit -- smears more than either. That is the whole of the chapter's
+    /// image: a wide lens close to the subject blurs everything behind it.
+    ///
+    /// (The book's own §13 text calls 3.4 "almost" the distance to the middle
+    /// ball, and quotes `3.4641` for it. That is `sqrt(12)`, the distance to a
+    /// ball at `z = -1` -- §12's geometry. §11's listing already moved the ball
+    /// to `z = -1.2`, so `3.58329562` is the number for this scene.)
     ///
     /// The frame size and the aspect ratio are read off the §12 constants
     /// because §13 does not change either; only the lens and the aperture move.
