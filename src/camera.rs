@@ -62,6 +62,9 @@ pub const COVER_FOCUS_DIST: f64 = 10.0;
 /// the disk is spanned by the same `u` and `v`, and the picture still reads
 /// row `j` as row `j`. At `defocus_angle = 0` the disk has zero radius and the
 /// camera is exactly the §7 pinhole again.
+///
+/// §13 also moves the viewport plane, from `|lookfrom - lookat|` out to
+/// `focus_dist`, and that one *does* matter: see `Camera::new`.
 pub struct Camera {
     pub image_width: usize,
     pub samples_per_pixel: usize,
@@ -125,10 +128,21 @@ impl Camera {
     /// rows increase downward.
     ///
     /// `defocus_angle` is the lens aperture in degrees and `focus_dist` is the
-    /// distance at which the lens is focused (§13). Both only affect where ray
-    /// *origins* land; the viewport above, and therefore every framing
-    /// property this camera has, is independent of them. A `defocus_angle` of
-    /// zero is a pinhole.
+    /// distance at which the lens is focused (§13).
+    ///
+    /// From §13 onward `focus_dist` is also the distance the viewport plane
+    /// sits in front of the eye -- the book's `viewport_height` and
+    /// `viewport_upper_left` both use it in place of `focal_length`. Only
+    /// `defocus_angle` is purely an aperture: it never moves the viewport.
+    ///
+    /// Using `|lookfrom - lookat|` for the viewport instead is not a harmless
+    /// reparameterisation. The lens admits a cone that half-angles at
+    /// `defocus_angle / 2`, and the defocus disk is that cone's radius at
+    /// `focus_dist`. Placing the viewport anywhere else makes the aperture
+    /// *measured at the viewport* `2 atan(radius / D)`, not `defocus_angle`.
+    /// For the cover, `focus_dist = 10` but `|lookfrom - lookat| = sqrt(182) =
+    /// 13.4907`, so the cone would be 0.4448 degrees wide instead of 0.6 --
+    /// 25.9% too narrow. A `defocus_angle` of zero is a pinhole.
     ///
     /// Ten parameters trips clippy's `too_many_arguments`, which counts `self`
     /// and defaults to a threshold of seven. The arguments are a closed
@@ -149,13 +163,20 @@ impl Camera {
     ) -> Self {
         let image_height = Self::derived_height(image_width, aspect_ratio);
 
-        // §12: the eye is `focal_length` in front of the target, and the
-        // viewport is the plane of width `2 h focal_length` at the eye,
-        // half-angles at the edges of `vfov`.
-        let focal_length = (lookfrom - lookat).length();
+        // §12 puts the viewport `focal_length` in front of the eye, where
+        // `focal_length = |lookfrom - lookat|`; §13 replaces that distance with
+        // `focus_dist` and leaves `focal_length` dead. The viewport is the
+        // plane of width `2 h focus_dist` at the eye, half-angled at the edges
+        // of `vfov`.
+        //
+        // The two distances usually differ. For `chapter_twelve` they are
+        // `sqrt(12) = 3.4641` against 10.0; for the cover `sqrt(182) =
+        // 13.4907` against 10.0. Keeping `focal_length` here would silently
+        // narrow every open lens, because the defocus disk is sized at
+        // `focus_dist` and so is the cone that reaches the viewport.
         let theta = crate::degrees_to_radians(vfov);
         let h = (theta / 2.0).tan();
-        let viewport_height = 2.0 * h * focal_length;
+        let viewport_height = 2.0 * h * focus_dist;
         let viewport_width = viewport_height * (image_width as f64 / image_height as f64);
 
         let w = (lookfrom - lookat).unit();
@@ -171,7 +192,7 @@ impl Camera {
         // The upper *left* corner, then the centre of pixel (0, 0). This is
         // the half-pixel the book's `0.5 *` exists for: without it, pixel (0, 0)
         // would be sampled at the corner rather than the middle of its square.
-        let viewport_upper_left = lookfrom - focal_length * w - viewport_u / 2.0 - viewport_v / 2.0;
+        let viewport_upper_left = lookfrom - focus_dist * w - viewport_u / 2.0 - viewport_v / 2.0;
         let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
         // §13: the defocus disk is the lens aperture. Rays start anywhere on it
@@ -240,6 +261,12 @@ impl Camera {
     ///
     /// The frame size and the aspect ratio are read off the §12 constants
     /// because §13 does not change either; only the lens and the aperture move.
+    /// §13 *does* change the distance the viewport plane sits at -- from
+    /// `|lookfrom - lookat| = sqrt(12) = 3.4641...` to `focus_dist = 3.4`. The
+    /// picture is unchanged by that, because every ray direction is `3.4` times
+    /// what it was and only directions are ever normalised, but the aperture
+    /// measured at the viewport is. See
+    /// `the_effective_aperture_at_the_viewport_is_the_defocus_angle`.
     pub fn chapter_thirteen() -> Self {
         Self::new(
             CHAPTER_TWELVE_WIDTH,
@@ -259,9 +286,11 @@ impl Camera {
     /// size.
     ///
     /// 1200 wide at 500 samples, a 20-degree lens from (13, 2, 3) looking at the
-    /// origin, behind a 0.6-degree aperture focused at 10. The focal length is
-    /// `|lookfrom - lookat| = sqrt(13^2 + 2^2 + 3^2) = sqrt(182) = 13.4907...`,
-    /// and the height follows from the aspect ratio as
+    /// origin, behind a 0.6-degree aperture focused at 10. The viewport plane
+    /// sits `focus_dist = 10` in front of the eye -- deliberately *not* the
+    /// `|lookfrom - lookat| = sqrt(13^2 + 2^2 + 3^2) = sqrt(182) = 13.4907...`
+    /// that §12 would have used, which would have narrowed the lens to 0.4448
+    /// degrees -- and the height follows from the aspect ratio as
     /// `1200 / (16/9) = 1200 * 9 / 16 = 675` exactly.
     ///
     /// This is the *listing*, not what `--width` and `--samples` produce: the
@@ -414,6 +443,14 @@ mod tests {
     /// framing is tested through `Camera::chapter_twelve`, where the frame is
     /// oblique and only its invariants -- orthonormality, ordering -- survive
     /// without a render.
+    ///
+    /// `focus_dist` is 10.0 while `lookat` is only 1.0 away, so the viewport
+    /// plane sits at 10, not at 1. Every closed form below is written against
+    /// that: the constants come out ten times what they were when the viewport
+    /// followed `focal_length`, and the direction's `z` is -10 rather than -1.
+    /// Keeping the two distances *different* is the point -- a camera whose
+    /// viewport distance equalled `|lookfrom - lookat|` could not tell the two
+    /// rules apart.
     ///
     /// The aperture is pinned shut at 0.0, which §13 needs for two reasons: the
     /// ray origin is then exactly `lookfrom`, so the directions below stay
@@ -597,13 +634,18 @@ mod tests {
 
     #[test]
     fn a_narrower_lens_shrinks_the_viewport() {
-        // focal_length = |(-2, 2, 1) - (0, 0, -1)| = |(-2, 2, 2)| = sqrt(12).
-        // viewport_height = 2 tan(vfov / 2) sqrt(12), and
+        // Both cameras are built with `focus_dist = 10`, so the viewport plane
+        // sits 10 units in front of the eye -- *not* at the
+        // `|lookfrom - lookat| = sqrt(12) = 3.4641...` §12 would have used, and
+        // the two are deliberately different so that this test can tell the
+        // rules apart. With
+        //     viewport_height = 2 tan(vfov / 2) * focus_dist = 20 tan(vfov / 2)
         //     |pixel_delta_u| = viewport_width / image_width
         //                    = viewport_height * (image_width / image_height) / image_width
         //                    = viewport_height / image_height
-        // so the two pixel widths should land on that closed form, with the
-        // 20-degree one well under the 90-degree one.
+        //                    = 20 tan(vfov / 2) / 225
+        // the two pixel widths land on that closed form, with the 20-degree one
+        // well under the 90-degree one.
         let lookfrom = Vec3::new(-2.0, 2.0, 1.0);
         let lookat = Vec3::new(0.0, 0.0, -1.0);
         let vup = Vec3::new(0.0, 1.0, 0.0);
@@ -632,50 +674,74 @@ mod tests {
             10.0,
         );
 
-        let expected = |vfov: f64| {
-            2.0 * (crate::degrees_to_radians(vfov) / 2.0).tan() * 12.0_f64.sqrt() / 225.0
-        };
+        // focus_dist, not |lookfrom - lookat|. `12.0_f64.sqrt()` here would be
+        // the §12 rule, and it is 2.8868x too small.
+        let expected =
+            |vfov: f64| 2.0 * (crate::degrees_to_radians(vfov) / 2.0).tan() * 10.0 / 225.0;
         assert!((wide.pixel_delta_u.length() - expected(90.0)).abs() < 1e-12);
         assert!((narrow.pixel_delta_u.length() - expected(20.0)).abs() < 1e-12);
         assert!(
             narrow.pixel_delta_u.length() < wide.pixel_delta_u.length(),
             "a 20-degree lens should cover fewer pixels than a 90-degree one"
         );
+
+        // And explicitly *not* the §12 distance: sqrt(12) = 3.4641 against
+        // focus_dist = 10, so the two rules cannot both be satisfied.
+        let chapter_twelve_rule = |vfov: f64| {
+            2.0 * (crate::degrees_to_radians(vfov) / 2.0).tan() * 12.0_f64.sqrt() / 225.0
+        };
+        assert!(
+            (wide.pixel_delta_u.length() - chapter_twelve_rule(90.0)).abs() > 1e-6,
+            "the viewport is still following |lookfrom - lookat|"
+        );
     }
 
     #[test]
     fn jittered_rays_land_inside_their_own_pixel() {
-        // An 8x8 axis camera. focal_length = 1, w = (0, 0, 1), u = (1, 0, 0),
-        // v = (0, 1, 0), viewport_height = 2 and viewport_width = 2, so
-        //     pixel_delta_u = (1/4, 0, 0)  and  pixel_delta_v = (0, -1/4, 0)
-        //     viewport_upper_left = (0,0,0) - (0,0,1) - (1,0,0) - (0,-1,0)
-        //                         = (-1, 1, -1)
-        //     pixel00_loc = (-1, 1, -1) + (1/8, -1/8, 0) = (-7/8, 7/8, -1)
+        // An 8x8 axis camera with focus_dist = 10. w = (0, 0, 1), u = (1, 0, 0),
+        // v = (0, 1, 0), and the viewport plane sits at z = -focus_dist = -10
+        // rather than at z = -|lookfrom - lookat| = -1:
+        //     viewport_height     = 2 t * 10 = 20 t        (t = tan(45 deg))
+        //     viewport_width      = 20 t * (8 / 8) = 20 t
+        //     pixel_delta_u       = 20 t / 8 = (5/2) t
+        //     pixel_delta_v       = -20 t / 8 = -(5/2) t
+        //     viewport_upper_left = (0,0,0) - 10 (0,0,1) - (10 t, 0, 0) - (0, -10 t, 0)
+        //                         = (-10 t, 10 t, -10)
+        //     pixel00_loc         = (-10 t, 10 t, -10) + (5t/4, -5t/4, 0)
+        //                         = (-35 t / 4, 35 t / 4, -10)
         // and the ray for (i, j, du, dv) points at
-        //     (-7/8 + (i + du)/4,  7/8 - (j + dv)/4,  -1).
+        //     (t (-35/4 + (5/2) (i + du)),  t (35/4 - (5/2) (j + dv)),  -10).
         //
-        // The half-pixel offset is why x starts at -7/8 rather than -1: pixel
-        // (0, 0) is sampled at the middle of its square, not its corner.
+        // The half-pixel offset is why x starts at -35/4 = -8.75 rather than
+        // -10: pixel (0, 0) is sampled at the middle of its square, not its
+        // corner.
         let camera = axis_camera(8, 8, 5, 1.0);
         for j in 0..camera.image_height {
             for i in 0..camera.image_width {
                 for k in 0..camera.samples_per_pixel {
                     let dir = sample_ray(&camera, SEED, i, j, k).direction;
-                    // Column 0 starts at -7/8; the last column stops short of
-                    // the far edge at 9/8, because `du < 1`.
+                    // `i + du` runs over [0, 8), so
+                    //     (5/2)(i + du) in [0, 20)  and  x/t in [-35/4, 45/4)
+                    // i.e. x in [-8.75, 11.25). The last column stops short of
+                    // the far edge because `du < 1`; `t` is one ulp under 1,
+                    // which makes both ends strict.
                     assert!(
-                        dir.x >= -0.875 && dir.x < 1.125,
+                        dir.x >= -8.75 && dir.x < 11.25,
                         "sample for pixel ({i}, {j}) left the viewport in x: {dir:?}"
                     );
-                    // Row 0 stops at 7/8 and row 7 runs down past -1, because
-                    // `pixel_delta_v` is negative. The bound is asymmetric and
-                    // that asymmetry is the orientation.
+                    // `pixel_delta_v` is negative, so row j covers
+                    //     y/t in (35/4 - (5/2)(j + 1),  35/4 - (5/2) j]
+                    // which over the whole image runs from 35/4 = 8.75 down to
+                    // 35/4 - 20 = -11.25. The bound is asymmetric and that
+                    // asymmetry is the orientation.
                     assert!(
-                        dir.y > -1.125 && dir.y <= 0.875,
+                        dir.y > -11.25 && dir.y <= 8.75,
                         "sample for pixel ({i}, {j}) left the viewport in y: {dir:?}"
                     );
-                    // Nothing in the frame tilts, so z is exactly -1.
-                    close(dir.z, -1.0);
+                    // Nothing in the frame tilts, so z is exactly the viewport
+                    // distance -- -10, not -1, because §13 puts the viewport at
+                    // focus_dist rather than at |lookfrom - lookat|.
+                    close(dir.z, -10.0);
                 }
             }
         }
@@ -688,17 +754,21 @@ mod tests {
         //
         // `t = tan(90 deg / 2)` is 0.9999999999999999, not 1 -- the closest
         // f64 to tan(pi/4) is one ulp low -- so every constant below is
-        // written in terms of `t` rather than as a decimal:
-        //     viewport_height   = 2 t          pixel_delta_v = -2 t / 8 = -t/4
-        //     viewport_u width  = 2 t          pixel_delta_u =  2 t / 8 =  t/4
-        //     upper-left x      = -t           upper-left y  =  t
-        //     pixel00_loc       = (-7t/8, 7t/8, -1)
+        // written in terms of `t` rather than as a decimal. `focus_dist = 10`
+        // puts the viewport plane at z = -10, so the viewport is 10 times the
+        // size it would have been at `focal_length = 1`:
+        //     viewport_height   = 2 t * 10 = 20 t
+        //     viewport_u width  = 20 t          pixel_delta_u =  20 t / 8 =  (5/2) t
+        //     viewport_v height = -20 t         pixel_delta_v = -20 t / 8 = -(5/2) t
+        //     upper-left        = (-10 t, 10 t, -10)
+        //     pixel00_loc       = (-10 t + 5t/4, 10 t - 5t/4, -10)
+        //                     = (-35 t / 4, 35 t / 4, -10)
         // so a ray through (i, j) with sample (du, dv) points at
-        //     (t (-7/8 + (i + du)/4),  t (7/8 - (j + dv)/4),  -1).
+        //     (t (-35/4 + (5/2) (i + du)),  t (35/4 - (5/2) (j + dv)),  -10).
         let t = (crate::degrees_to_radians(90.0) / 2.0).tan();
         let camera = axis_camera(8, 1, 5, 1.0);
-        let x = |i: usize, du: f64| t * (-7.0 / 8.0 + (i as f64 + du) / 4.0);
-        let y = |j: usize, dv: f64| t * (7.0 / 8.0 - (j as f64 + dv) / 4.0);
+        let x = |i: usize, du: f64| t * (-35.0 / 4.0 + (5.0 / 2.0) * (i as f64 + du));
+        let y = |j: usize, dv: f64| t * (35.0 / 4.0 - (5.0 / 2.0) * (j as f64 + dv));
 
         // §12 flips the frame: `viewport_v = viewport_height * -v` makes the row
         // step negative, so `j` counts down and the last row is the bottom.
@@ -727,8 +797,8 @@ mod tests {
         let top = camera.get_ray(3, 0, 0.25, 0.25, &mut rng).direction;
         let below = camera.get_ray(3, 1, 0.25, 0.25, &mut rng).direction;
         let bottom = camera.get_ray(3, 7, 0.25, 0.25, &mut rng).direction;
-        close(below.y - top.y, -t / 4.0);
-        close(bottom.y - top.y, -7.0 * t / 4.0);
+        close(below.y - top.y, -(5.0 / 2.0) * t);
+        close(bottom.y - top.y, -(35.0 / 2.0) * t);
         assert!(top.y > below.y && below.y > bottom.y);
 
         // Right is still right: `pixel_delta_u` keeps the sign of `u`.
@@ -736,21 +806,26 @@ mod tests {
         let right = camera.get_ray(7, 3, 0.5, 0.5, &mut rng).direction;
         close(left.x, x(0, 0.5));
         close(right.x, x(7, 0.5));
-        close(right.x - left.x, 7.0 * t / 4.0);
+        close(right.x - left.x, (35.0 / 2.0) * t);
     }
 
     #[test]
     fn the_viewport_follows_the_image_aspect_ratio() {
-        // A 20-wide camera on 20:12. focal_length = 1 and viewport_height =
-        // 2 tan(90/2), so viewport_width = 2 tan(90/2) * 20/12 and
-        //     pixel_delta_u = (1/6, 0, 0)  and  pixel_delta_v = (0, -1/6, 0)
-        //     viewport_upper_left = (-5/3, 1, -1)
-        //     pixel00_loc = (-5/3, 1, -1) + (1/12, -1/12, 0) = (-19/12, 11/12, -1)
+        // A 20-wide camera on 20:12, so `20 / (20/12) = 12` rows. The viewport
+        // plane sits at z = -focus_dist = -10, so
+        //     viewport_height = 2 t * 10 = 20 t
+        //     viewport_width  = 20 t * (20 / 12) = 100 t / 3
+        //     pixel_delta_u   = (100 t / 3) / 20 = 5 t / 3
+        //     pixel_delta_v   = -20 t / 12      = -5 t / 3
+        //     viewport_upper_left = (0,0,0) - (0,0,10) - (50 t / 3, 0, 0) - (0, -10 t, 0)
+        //                         = (-50 t / 3, 10 t, -10)
+        //     pixel00_loc = (-50 t / 3 + 5t/6,  10 t - 5t/6,  -10)
+        //                 = (-95 t / 6,       55 t / 6,     -10)
         // up to the same one-ulp-low tan(pi/4) that `larger_j_points_lower`
         // works around, which `close`'s 1e-9 more than covers.
         //
         // Pixel (0, 0)'s ray therefore points at
-        //     (-19/12 + du/6,  11/12 - dv/6,  -1).
+        //     (-95 t / 6 + (5 t / 3) du,  55 t / 6 - (5 t / 3) dv,  -10).
         let world = empty_world();
         let camera = axis_camera(20, 1, 5, 20.0 / 12.0);
         let image = camera
@@ -768,7 +843,12 @@ mod tests {
         // takes is never read and the ray is still the §7 pinhole ray.
         let mut rng = Rng::seed_from_u64(SEED);
 
-        let direction = Vec3::new(-19.0 / 12.0 + du / 6.0, 11.0 / 12.0 - dv / 6.0, -1.0);
+        let t = (crate::degrees_to_radians(90.0) / 2.0).tan();
+        let direction = Vec3::new(
+            -95.0 / 6.0 * t + (5.0 / 3.0) * t * du,
+            55.0 / 6.0 * t - (5.0 / 3.0) * t * dv,
+            -10.0,
+        );
         assert_vec_close(camera.get_ray(0, 0, du, dv, &mut rng).direction, direction);
 
         // a = 0.5 * (unit.y + 1): blue is (1 - a) + a = 1, red gives up 0.5a
@@ -779,9 +859,10 @@ mod tests {
             sky_color(direction),
             "the top-left pixel should be the sky in the top-left sample"
         );
-        // 11/12 - dv/6 is at least 11/12 - 1/6 = 3/4, so this ray points up and
-        // the miss really is the sky rather than the ground.
-        assert!(direction.y > 0.75);
+        // 55 t / 6 - (5 t / 3) dv is at least 55/6 - 5/3 = 45/6 = 15/2 = 7.5,
+        // so this ray points up hard and the miss really is the sky rather than
+        // the ground.
+        assert!(direction.y > 7.5);
     }
 
     #[test]
@@ -885,15 +966,21 @@ mod tests {
 
     #[test]
     fn sky_is_above_and_ground_below() {
-        // An 8x8 axis camera: with t = tan(45 deg) and the viewport 2t tall and
-        // 2t wide,
-        //     pixel00_loc = (-7t/8, 7t/8, -1), pixel_delta_u = (t/4, 0, 0),
-        //     pixel_delta_v = (0, -t/4, 0)
-        // so the direction is t(-7/8 + (i + du)/4, 7/8 - (j + dv)/4, -1).
-        // Column 0 puts x in [-7/8, -3/4) and rows 0 and 7 are the ends:
-        //   row 0  y in (5/8, 7/8]   -- looking up
-        //   row 7  y in [-9/8, -7/8) -- looking down
-        // `t` is one ulp under 1, so the bounds below are rounded outwards.
+        // An 8x8 axis camera with focus_dist = 10. With t = tan(45 deg) the
+        // viewport is `2 t * 10 = 20 t` tall and wide and its plane sits at
+        // z = -10, so
+        //     pixel00_loc = (-35t/4, 35t/4, -10), pixel_delta_u = (5t/2, 0, 0),
+        //     pixel_delta_v = (0, -5t/2, 0)
+        // and the direction is `(t X, t Y, -10)` with
+        //     X = -35/4 + (5/2) (i + du),   Y = 35/4 - (5/2) (j + dv).
+        // Column 0 puts X in [-35/4, -25/4) = [-8.75, -6.25) and rows 0 and 7
+        // are the ends:
+        //   row 0  Y in (25/4, 35/4]   = (6.25, 8.75]      -- looking up
+        //   row 7  Y in (-45/4, -35/4] = (-11.25, -8.75]  -- looking down
+        //
+        // Every constant below is `t`-free because `Sphere::hit` divides the
+        // quadratic through by `a = |d|^2`, which absorbs the scale. `t` itself
+        // is one ulp under 1, so the bounds below are rounded outwards.
         let objects = scene::build(Scene::Spheres, &mut Rng::seed_from_u64(SEED));
         let world = test_world(&objects);
         let camera = axis_camera(8, 1, 5, 1.0);
@@ -902,26 +989,35 @@ mod tests {
             .unwrap();
         let width = image.width;
 
-        // Row 0 looks up: y is in (5/8, 7/8]. All four spheres miss over that
+        // Row 0 looks up: Y is in (25/4, 35/4]. All four spheres miss over that
         // whole rectangle, whatever the draw.
         //
-        //   ground  half_b = 100.5 y - 1 >= 100.5 * 5/8 - 1 = 61.8125 and
+        //   ground  half_b = 100.5 Y - 10 >= 100.5 * 6.25 - 10 = 618.125 and
         //           c = 101.25 > 0, so sqrtd < half_b and both roots in
         //           `Sphere::hit` are negative.
-        //   glass   disc = -0.75 x^2 - 2 x - 1.75 y^2 - 0.75, maximised at
-        //           (x, y) = (-7/8, 5/8): -0.2578125 < 0.
-        //   blue    disc = 1 - 0.75 (x^2 + y^2 + 1) <= 1 - 0.75 * 1.78125
-        //           = -0.3359375 < 0.
-        //   metal   half_b = -x - 1 <= -1/4, so half_b^2 <= 0.0625 against
-        //           1.75 (x^2 + y^2 + 1) >= 3.11640625.
+        //   glass   disc = -0.75 X^2 - 20 X - 1.75 Y^2 - 75, which falls in X
+        //           (d/dX = -1.5 X - 20 < 0 over [-8.75, -6.25]) and in Y
+        //           (d/dY = -3.5 Y < 0 over (6.25, 8.75]), so it is maximised
+        //           at (X, Y) = (-35/4, 25/4):
+        //           -57.421875 + 175 - 68.359375 - 75 = -25.78125 < 0.
+        //   blue    half_b = -10 and c = 0.75, so disc = 100 - 0.75 a with
+        //           a = X^2 + Y^2 + 100 > 39.0625 + 39.0625 + 100 = 278.125,
+        //           giving disc < 100 - 208.59375 = -108.59375 < 0.
+        //   metal   half_b = -X - 10 in (-3.75, -1.25], so half_b^2 <= 14.0625
+        //           against 1.75 a >= 1.75 * 278.125 = 486.71875.
         //
         // The sky pins blue at exactly 1.0, because `sky_color` returns
-        // (1 - a) + a. Over that rectangle the unit y runs from
-        // (5/8) / sqrt(0.765625 + 0.390625 + 1) = 0.42562827 to
-        // (7/8) / sqrt(0.390625 + 0.765625 + 1) = 0.59587957, so
-        // a runs [0.71281413, 0.79793979], red gives up 0.5a and green 0.3a,
-        // and red lands in [0.60103011, 0.64359293] and green in
-        // [0.76061806, 0.78615576].
+        // (1 - a) + a and `1 - a` is exact for a in [0, 1] by Sterbenz, so the
+        // sum is exactly 1. Over that rectangle the unit y runs from
+        // (25/4) / sqrt((35/4)^2 + (25/4)^2 + 100) = 6.25 / sqrt(215.625)
+        //     = 6.25 / 14.6841752 = 0.42562879 to
+        // (35/4) / sqrt((25/4)^2 + (35/4)^2 + 100) = 8.75 / 14.6841752
+        //     = 0.59587973.
+        // The two denominators are the same because the rectangle's two corners
+        // are transposes of each other. So a = 0.5 (unit.y + 1) runs
+        // [0.71281440, 0.79793987], red gives up 0.5a and green 0.3a, and red
+        // lands in [0.60103007, 0.64359280] and green in
+        // [0.76061804, 0.78615576].
         let top = image.pixels[0];
         assert_eq!(top[2], 1.0, "sky blue is exactly 1, got {top:?}");
         assert!(
@@ -933,9 +1029,10 @@ mod tests {
             "sky green {top:?}, expected in (0.7605, 0.7863)"
         );
 
-        // Row 7 looks down: y is in [-9/8, -7/8), and the same four checks
-        // leave the ground as the only thing there to hit. The glass's disc tops
-        // out at -0.9140625, the blue ball's at -0.6171875, and the metal ball
+        // Row 7 looks down: Y is in (-45/4, -35/4] = (-11.25, -8.75], and the
+        // same four checks leave the ground as the only thing there to hit. The
+        // glass's disc tops out at -91.40625 at (X, Y) = (-35/4, -35/4), the
+        // blue ball's at 100 - 0.75 (215.625) = -61.71875, and the metal ball
         // is out on x as above.
         //
         // So this pixel's first material is the ground, whose albedo §11 made
@@ -972,26 +1069,31 @@ mod tests {
 
     #[test]
     fn a_column_reads_sky_then_ball_then_ground() {
-        // An 8-wide camera on 8:16, so 16 rows. viewport_width = 2 * 8/16 = 1
-        // and viewport_height = 2, giving
-        //     pixel_delta_u = (1/8, 0, 0)  and  pixel_delta_v = (0, -1/8, 0)
-        //     viewport_upper_left = (-1/2, 1, -1)
-        //     pixel00_loc = (-1/2 + 1/16, 1 - 1/16, -1) = (-7/16, 15/16, -1)
-        // and the direction is (-7/16 + (i + du)/8, 15/16 - (j + dv)/8, -1).
+        // An 8-wide camera on 8:16, so 16 rows. With focus_dist = 10 the
+        // viewport plane sits at z = -10 and
+        //     viewport_height = 2 t * 10 = 20 t    viewport_width = 20 t * 8/16 = 10 t
+        //     pixel_delta_u = (5 t / 4, 0, 0)      pixel_delta_v = (0, -5 t / 4, 0)
+        //     viewport_upper_left = (0,0,0) - (0,0,10) - (5 t, 0, 0) - (0, -10 t, 0)
+        //                         = (-5 t, 10 t, -10)
+        //     pixel00_loc = (-5 t + 5t/8,  10 t - 5t/8,  -10) = (-35 t/8, 75 t/8, -10)
+        // and the direction is `(t X, t Y, -10)` with
+        //     X = -35/8 + (5/4) (i + du),   Y = 75/8 - (5/4) (j + dv).
         //
-        // Column 0 puts x in [-7/16, -5/16), which is inside the middle ball's
-        // x range [-1/2, 1/2] and outside both side balls: the glass is at
+        // Column 0 puts X in [-35/8, -25/8) = [-4.375, -3.125), which is inside
+        // the middle ball's x range and outside both side balls: the glass is at
         // x = -1 with r = 0.5 and needs x <= -0.4514 to be hit at all, and its
-        // disc at (x, y) = (-7/16, 0) is -0.01855469 < 0. So column 0 sees
-        // only sky, the middle ball and the ground, and the three occupy
-        // cleanly separated bands of rows:
+        // disc at (x, y) = (-7/16, 0) is -0.01855469 < 0. So column 0 sees only
+        // sky, the middle ball and the ground, and the three occupy cleanly
+        // separated bands of rows:
         //
-        //   rows 0-2    y in (9/16, 15/16]   -- above the ball
-        //   rows 5-9    |y| <= 5/16           -- inside it (the ball reaches
-        //                                            |y| <= 0.37673211 at
-        //                                            x = -7/16 and at most
-        //                                            0.48546584 at x = -5/16)
-        //   rows 12-15  |y| >= 9/16           -- below it
+        //   rows 0-2    Y in (45/8, 75/8] = (5.625, 9.375] -- above the ball
+        //   rows 5-9    |Y| <= 25/8 = 3.125          -- inside it (the ball's
+        //                                                  silhouette is
+        //                                                  |Y| <= 3.76732125 at
+        //                                                  X = -35/8 and at most
+        //                                                  4.85465838 at
+        //                                                  X = -25/8)
+        //   rows 12-15  |Y| >= 45/8 = 5.625          -- below it
         //
         // and rows 3, 4, 10 and 11 straddle a silhouette, so the jitter picks
         // what they hit and all that survives is a range.
@@ -1004,12 +1106,14 @@ mod tests {
         let width = image.width;
         assert_eq!((image.width, image.height), (8, 16));
 
-        // Rows 0-2 are sky whatever the draw. Over x in [-7/16, -5/16) and
-        // y in (9/16, 15/16] the unit y runs from
-        // (9/16) / sqrt(0.19140625 + 0.31640625 + 1) = 0.45808794 to
-        // (15/16) / sqrt(0.09765625 + 0.87890625 + 1) = 0.66683134, so a runs
-        // [0.72904397, 0.83341567], red in [0.58329217, 0.63547802] and green
-        // in [0.74997530, 0.78128681].
+        // Rows 0-2 are sky whatever the draw. Over X in [-35/8, -25/8) and
+        // Y in (45/8, 75/8] the unit y runs from
+        // (45/8) / sqrt((35/8)^2 + (45/8)^2 + 100) = 5.625 / sqrt(150.78125)
+        //     = 5.625 / 12.27930103 = 0.45808750 to
+        // (75/8) / sqrt((25/8)^2 + (75/8)^2 + 100) = 9.375 / sqrt(197.65625)
+        //     = 9.375 / 14.05901914 = 0.66683135, so a runs
+        // [0.72904375, 0.83341568], red in [0.58329216, 0.63547816] and green
+        // in [0.74997530, 0.78128680].
         for row in 0..=2 {
             let got = image.pixels[row * width];
             assert_eq!(got[2], 1.0, "row {row} should be sky, got {got:?}");
@@ -1143,6 +1247,81 @@ mod tests {
         );
     }
 
+    /// The distance from the eye to the viewport plane, measured off the
+    /// camera's own pixel grid rather than read back from `focus_dist`.
+    ///
+    /// The viewport's centre is `viewport_upper_left + viewport_u / 2 +
+    /// viewport_v / 2`, and `pixel00_loc` is that corner plus half a pixel step
+    /// in each direction, so the centre is `pixel00_loc` plus half of the last
+    /// pixel's index in each axis. Reading it back this way means a caller can
+    /// check what the constructor *built* rather than what it was told.
+    fn viewport_distance(camera: &Camera) -> f64 {
+        let centre = camera.pixel00_loc
+            + camera.pixel_delta_u * ((camera.image_width - 1) as f64 / 2.0)
+            + camera.pixel_delta_v * ((camera.image_height - 1) as f64 / 2.0);
+        // `w` points from the target back toward the eye, so the viewport is
+        // *behind* the eye along `w`.
+        (camera.lookfrom - centre).dot(camera.w)
+    }
+
+    #[test]
+    fn the_effective_aperture_at_the_viewport_is_the_defocus_angle() {
+        // The lens admits a cone that half-angles at `defocus_angle / 2`, and
+        // the defocus disk is that cone's cross-section at `focus_dist`. The
+        // cone widens again on its way to the viewport plane, so the angle the
+        // viewport actually subtends is
+        //
+        //     2 atan(defocus_radius / viewport_distance)
+        //
+        // and that equals `defocus_angle` only when the viewport sits at
+        // `focus_dist`. §13 says it does; §12's `|lookfrom - lookat|` does not,
+        // and the two are not interchangeable.
+        for camera in [Camera::cover(), Camera::chapter_thirteen()] {
+            let distance = viewport_distance(&camera);
+            close(distance, camera.focus_dist);
+
+            let radius = camera.defocus_disk_u.length();
+            let effective = (2.0 * (radius / distance).atan()).to_degrees();
+            close(effective, camera.defocus_angle);
+        }
+
+        // The cover, spelled out. `focus_dist = 10` and
+        // `defocus_angle = 0.6`, so
+        //     defocus_radius = 10 tan(0.3 deg) = 10 * 0.00523603560570013
+        //                        = 0.052360356057001275
+        //     viewport_distance = 10
+        //     2 atan(0.052360356057001275 / 10)
+        //         = 2 atan(0.00523603560570013)
+        //         = 2 * 0.005235987755982989 rad
+        //         = 0.6 degrees, exactly what the lens claims.
+        let cover = Camera::cover();
+        close(viewport_distance(&cover), 10.0);
+        close(cover.defocus_disk_u.length(), 0.052360356057001275);
+
+        // Under §12's rule the very same disk is read from a viewport at
+        // `|lookfrom - lookat| = sqrt(13^2 + 2^2 + 3^2) = sqrt(182) =
+        // 13.490737563232042`:
+        //     2 atan(0.052360356057001275 / 13.490737563232042)
+        //         = 2 atan(0.0038812078147384146)
+        //         = 2 * 0.003881188... rad
+        //         = 0.44475142119273259 degrees,
+        // which is 74.1252% of the 0.6 asked for -- 25.87% too narrow. That is
+        // the whole of the bug, and it is a factor no amount of extra samples
+        // recovers.
+        let focal = (cover.lookfrom - cover.lookat).length();
+        close(focal, 182.0_f64.sqrt());
+        let under_section_twelve =
+            (2.0 * (cover.defocus_disk_u.length() / focal).atan()).to_degrees();
+        assert!(
+            (under_section_twelve - 0.44475142119273259).abs() < 1e-12,
+            "§12's viewport distance gives {under_section_twelve} degrees"
+        );
+        assert!(
+            under_section_twelve < COVER_DEFOCUS_ANGLE * 0.75,
+            "the old rule narrowed the lens to {under_section_twelve} degrees"
+        );
+    }
+
     #[test]
     fn the_defocus_disk_spans_the_camera_axes() {
         // `defocus_disk_u = u * radius` and `defocus_disk_v = v * radius`. The
@@ -1200,8 +1379,19 @@ mod tests {
         );
         // Same pixel, same sample offset, so both rays run to the same point of
         // the viewport -- `Ray::new` leaves the direction unnormalised, so
-        // `at(1.0)` is exactly that shared endpoint. Only the lens end moved.
-        assert_eq!(first.at(1.0), second.at(1.0));
+        // `at(1.0)` is that shared endpoint. Only the lens end moved.
+        //
+        // The endpoint is recomputed here rather than read off one of the two
+        // rays, because `at(1.0)` is `origin + (endpoint - origin)` and that
+        // is not the identity in f64: it agreed exactly while the viewport sat
+        // at `|lookfrom - lookat|`, and stopped agreeing once §13 moved it to
+        // `focus_dist`. Checking both rays against the pixel grid is a stronger
+        // claim than checking that the two agree with each other.
+        let endpoint = camera.pixel00_loc
+            + camera.pixel_delta_u * (3.0 + 0.5)
+            + camera.pixel_delta_v * (3.0 + 0.5);
+        assert_vec_close(first.at(1.0), endpoint);
+        assert_vec_close(second.at(1.0), endpoint);
         // And each origin is within a defocus radius of the eye.
         let radius = camera.defocus_disk_u.length();
         assert!((first.origin - camera.lookfrom).length() <= radius + 1e-9);
